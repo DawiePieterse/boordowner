@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Boord Eienaar</title>
+<link rel="icon" href="../admin/icons/icon-192.png">
+<meta name="theme-color" content="#0A2F6B">
+<script src="../shared/tailwind.js"></script>
+<link rel="stylesheet" href="../shared/vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="../shared/styles.css">
+<script src="../shared/api.js"></script>
+<script src="../shared/charts.js"></script>
+<script src="../shared/analysis-tab.js"></script>
+<script src="../shared/weather-tab.js"></script>
+<script src="../shared/risk-tab.js"></script>
+<script src="../shared/ptr.js"></script>
+<script src="../shared/vendor/html2canvas/html2canvas.min.js"></script>
+<script src="../shared/vendor/jspdf/jspdf.umd.min.js"></script>
+</head>
+<body class="bg-slate-100 min-h-screen pb-6">
+
+<!-- Shown if the link has no key, or the key is wrong -->
+<div id="deniedScreen" class="hidden min-h-screen flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl shadow p-6 w-full max-w-sm text-center">
+    <i class="fa-solid fa-lock text-3xl text-slate-300 mb-3"></i>
+    <div class="text-lg font-bold" style="color: var(--boord-blue)">Owner View</div>
+    <div class="text-sm text-slate-500 mt-2">
+      This link isn't valid. Ask the farm office for the current Owner View
+      link (Settings → Owner View, in Admin).
+    </div>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <div class="boord-header p-4">
+    <div class="flex items-start justify-between gap-3">
+      <div>
+        <div id="headerFarmName" class="font-bold text-2xl md:text-3xl leading-tight">Boord</div>
+        <div id="headerDateTime" class="text-lg md:text-xl font-semibold text-white/90 mt-1">&nbsp;</div>
+        <div class="text-xs text-white/60 mt-1">Boord Eienaar - read-only</div>
+      </div>
+      <div class="text-right">
+        <div id="headerWeather" class="text-sm md:text-base font-semibold text-white/90"></div>
+        <div id="appVersion" class="text-xs text-white/60 mt-1"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flex overflow-x-auto bg-white shadow sticky top-0 z-10">
+    <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+    <button class="tab-btn" data-tab="analysis">Analysis</button>
+    <button class="tab-btn" data-tab="weather">Weather</button>
+    <button class="tab-btn" data-tab="risk">Risk</button>
+  </div>
+
+  <div class="p-4 max-w-7xl mx-auto">
+
+    <div id="tab-dashboard" class="tab-content space-y-4">
+      <div class="bg-white rounded-xl shadow p-4 flex flex-wrap gap-3 items-end">
+        <div><label class="text-xs text-slate-500 block">Farm / Supplier</label><select id="dashSupplierFilter" class="border border-slate-300 rounded-lg p-2 text-sm"></select></div>
+        <div><label class="text-xs text-slate-500 block">Period start</label><input type="date" id="dashStart" class="border border-slate-300 rounded-lg p-2"></div>
+        <div><label class="text-xs text-slate-500 block">Period end</label><input type="date" id="dashEnd" class="border border-slate-300 rounded-lg p-2"></div>
+        <button id="dashTodayBtn" class="date-preset-btn px-3 py-2 bg-slate-200 rounded-lg text-sm">Today</button>
+        <button id="dashWeekBtn" class="date-preset-btn px-3 py-2 bg-slate-200 rounded-lg text-sm">This Week</button>
+        <button id="dashSeasonBtn" class="date-preset-btn px-3 py-2 bg-slate-200 rounded-lg text-sm">Season</button>
+      </div>
+
+      <div id="dashKpiGrid" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
+
+      <div class="bg-white rounded-xl shadow">
+        <button class="collapsible-header w-full flex justify-between items-center p-4 text-left" data-target="dash-harvesting-body">
+          <span id="dash-harvesting-title" class="font-semibold">Harvesting</span>
+          <i class="fa-solid fa-chevron-down"></i>
+        </button>
+        <div id="dash-harvesting-body" class="collapsible-body hidden border-t divide-y"></div>
+      </div>
+
+      <div class="bg-white rounded-xl shadow">
+        <button class="collapsible-header w-full flex justify-between items-center p-4 text-left" data-target="dash-intransit-body">
+          <span id="dash-intransit-title" class="font-semibold">In Transit</span>
+          <i class="fa-solid fa-chevron-down"></i>
+        </button>
+        <div id="dash-intransit-body" class="collapsible-body hidden border-t divide-y"></div>
+      </div>
+
+      <div class="bg-white rounded-xl shadow">
+        <button class="collapsible-header w-full flex justify-between items-center p-4 text-left" data-target="dash-received-body">
+          <span id="dash-received-title" class="font-semibold">Received</span>
+          <i class="fa-solid fa-chevron-down"></i>
+        </button>
+        <div id="dash-received-body" class="collapsible-body hidden border-t divide-y"></div>
+      </div>
+
+      <div class="bg-white rounded-xl shadow">
+        <button class="collapsible-header w-full flex justify-between items-center p-4 text-left" data-target="dash-workers-body">
+          <span id="dash-workers-title" class="font-semibold">Workers</span>
+          <i class="fa-solid fa-chevron-down"></i>
+        </button>
+        <div id="dash-workers-body" class="collapsible-body hidden border-t overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead><tr class="text-left border-b"><th class="p-2">Employee Code</th><th class="p-2">Worker</th><th class="p-2">Farm/Supplier</th><th class="p-2">Crates</th><th class="p-2">Kg</th><th class="p-2">Avg Kg/Crate</th></tr></thead>
+            <tbody id="dash-workers-rows"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl shadow">
+        <button class="collapsible-header w-full flex justify-between items-center p-4 text-left" data-target="dash-blocks-body">
+          <span id="dash-blocks-title" class="font-semibold">Blocks</span>
+          <i class="fa-solid fa-chevron-down"></i>
+        </button>
+        <div id="dash-blocks-body" class="collapsible-body hidden border-t overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead><tr class="text-left border-b"><th class="p-2">Block</th><th class="p-2">Crates</th><th class="p-2">Kg</th><th class="p-2">Avg Kg/Crate</th><th class="p-2">Avg Kg/Tree</th><th class="p-2">Avg Kg/Ha</th></tr></thead>
+            <tbody id="dash-blocks-rows"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ANALYSIS -->
+    <div id="tab-analysis" class="tab-content hidden space-y-4">
+      <div class="text-xs text-slate-500">
+        Comparing the current season against 2020-2025 historical records. Figures marked
+        <i class="fa-solid fa-circle-info"></i> are estimates split from combined historical block totals.
+      </div>
+
+      <div id="analysisKpiGrid" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
+
+      <div class="bg-white rounded-xl shadow p-4">
+        <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+          <div class="font-semibold">Season Pace - cumulative kg vs history</div>
+          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="seasonPaceExport" data-title="Season Pace" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+        </div>
+        <div class="text-xs text-slate-500 mb-2">How this season's cumulative harvest compares to each prior year and the 5-year average, day by day.</div>
+        <div id="seasonPaceExport">
+          <div id="seasonPaceChart" class="overflow-x-auto"></div>
+          <div id="seasonPaceLegend" class="mt-2"></div>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl shadow p-4">
+        <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+          <div class="font-semibold">Per-Block Yield - this season vs historical average</div>
+          <div class="flex items-center gap-2">
+            <select id="blockYieldMetric" class="border border-slate-300 rounded-lg p-1.5 text-sm">
+              <option value="kg_ha">Kg / Hectare</option>
+              <option value="kg_tree">Kg / Tree</option>
+            </select>
+            <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="blockYieldChart" data-title="Per-Block Yield" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+          </div>
+        </div>
+        <div class="text-xs text-slate-500 mb-2">Which blocks are over- or under-performing their own history, normalized for block size.</div>
+        <div id="blockYieldChart" class="overflow-x-auto"></div>
+        <div class="overflow-x-auto mt-3">
+          <table class="w-full text-sm">
+            <thead><tr class="text-left border-b">
+              <th class="p-2">Block</th><th class="p-2">Variety</th>
+              <th class="p-2" id="blockYieldCol1">This Season Kg/Ha</th><th class="p-2" id="blockYieldCol2">Historical Avg Kg/Ha</th><th class="p-2">vs Average</th>
+            </tr></thead>
+            <tbody id="blockYieldRows"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl shadow p-4">
+        <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+          <div class="font-semibold">Harvest Volume by Block and Season</div>
+          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="blockSeasonBubbleChart" data-title="Harvest Volume by Block and Season" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+        </div>
+        <div class="text-xs text-slate-500 mb-2">Bubble size = kg harvested - which blocks and seasons produced the most, at a glance.</div>
+        <div id="blockSeasonBubbleChart" class="overflow-x-auto"></div>
+      </div>
+
+      <div class="bg-white rounded-xl shadow p-4">
+        <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+          <div class="font-semibold" id="yieldPerTreeTitle">Yield per Tree by Block and Season</div>
+          <div class="flex items-center gap-2">
+            <select id="yieldPerTreeMetric" class="border border-slate-300 rounded-lg p-1.5 text-sm">
+              <option value="kg_tree">Kg / Tree</option>
+              <option value="kg_ha">Kg / Hectare</option>
+            </select>
+            <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="yieldPerTreeHeatmap" data-title="Yield per Block and Season" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+          </div>
+        </div>
+        <div class="text-xs text-slate-500 mb-2">Every block against every season - scan for blocks or years running consistently high or low.</div>
+        <div id="yieldPerTreeHeatmap" class="overflow-x-auto"></div>
+      </div>
+
+      <div class="bg-white rounded-xl shadow p-4">
+        <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+          <div class="font-semibold">Variety Performance Over Time</div>
+          <div class="flex items-center gap-2">
+            <select id="varietyFilter" class="border border-slate-300 rounded-lg p-1.5 text-sm"></select>
+            <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="varietyYieldExport" data-title="Variety Performance Over Time" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+          </div>
+        </div>
+        <div class="text-xs text-slate-500 mb-2">Average kg per tree per variety, by season - spot varieties trending up or down.</div>
+        <div id="varietyYieldExport">
+          <div id="varietyYieldChart" class="overflow-x-auto"></div>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl shadow p-4">
+        <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+          <div class="font-semibold">Harvest Season Length (first pick &rarr; last pick)</div>
+          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="seasonLengthChart" data-title="Harvest Season Length" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+        </div>
+        <div class="text-xs text-slate-500 mb-2">When picking started and ended each season, and how many of those days actually had picking.</div>
+        <div id="seasonLengthChart" class="overflow-x-auto"></div>
+      </div>
+
+      <div class="bg-white rounded-xl shadow p-4">
+        <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+          <div class="font-semibold">Monthly Harvest Volume</div>
+          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="monthlyHeatmap" data-title="Monthly Harvest Volume" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+        </div>
+        <div class="text-xs text-slate-500 mb-2">Kg picked by month, every season, with each month's share of that season's total.</div>
+        <div id="monthlyHeatmap" class="overflow-x-auto"></div>
+      </div>
+    </div>
+
+    <div id="tab-weather" class="tab-content hidden space-y-4">
+      <div class="text-xs text-slate-500">
+        Historical weather at the farm's location, 1987 to today, one line per year you tick.
+        Opening this tab pulls any hours since the last update from the weather service and adds
+        them to the stored history.
+      </div>
+
+      <div class="bg-white rounded-xl shadow p-4">
+        <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+          <div class="font-semibold">Historical Weather</div>
+          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="weatherChartExport" data-title="Historical Weather" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+        </div>
+        <div class="text-xs text-slate-500 mb-2" id="weatherLastSynced"></div>
+
+        <div class="flex flex-wrap gap-x-6 gap-y-2 mb-3 pb-3 border-b">
+          <div id="weatherMetricFilter" class="flex flex-wrap items-center"></div>
+        </div>
+        <div id="weatherYearFilter" class="flex flex-wrap gap-x-3 gap-y-1 mb-3"></div>
+
+        <div id="weatherChartExport">
+          <div id="weatherChart" class="overflow-x-auto"></div>
+          <div id="weatherLegend" class="mt-2"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-risk" class="tab-content hidden space-y-4">
+      <div class="text-xs text-slate-500">
+        A transparent 0-100 score of how risky a season's weather looks for a poor harvest, built from
+        the four weather factors that best explained this farm's own harvest variation across its full
+        record - not a generic forecast. See "How this score is calculated" below for the method and its limits.
+      </div>
+
+      <div class="bg-white rounded-xl shadow p-4">
+        <div class="mb-1">
+          <div class="font-semibold">Harvest Forecast - Current Season</div>
+          <div class="text-xs text-slate-500">Three scenarios for this season's total kg, not one falsely-precise number - see "How this score is calculated" below for how these are built.</div>
+        </div>
+        <div id="harvestForecastCard" class="mt-3"></div>
+      </div>
+
+      <div class="bg-white rounded-xl shadow p-4">
+        <div class="flex items-center justify-between flex-wrap gap-2 mb-3">
+          <div class="font-semibold">Critical Season Risk Score</div>
+          <div class="flex items-center gap-2">
+            <label class="text-xs text-slate-500">Season</label>
+            <select id="riskSeasonFilter" class="border border-slate-300 rounded-lg p-1.5 text-sm"></select>
+          </div>
+        </div>
+        <div id="riskScoreHeader" class="flex flex-wrap items-center justify-between gap-3 mb-4 pb-4 border-b"></div>
+        <div id="riskComponents" class="grid gap-3 md:grid-cols-2"></div>
+      </div>
+
+      <div class="bg-white rounded-xl shadow p-4">
+        <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+          <div class="font-semibold">Risk Score by Season</div>
+          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="riskScoreChartExport" data-title="Risk Score by Season" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+        </div>
+        <div class="text-xs text-slate-500 mb-2">Back-tested against every season on file: does a higher score line up with a poorer harvest that year? (* = current season, may still be partial)</div>
+        <div id="riskScoreChartExport">
+          <div id="riskScoreChart" class="overflow-x-auto"></div>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl shadow p-4">
+        <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+          <div class="font-semibold">Actual Harvest by Season</div>
+          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="riskKgChartExport" data-title="Actual Harvest by Season" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+        </div>
+        <div id="riskKgChartExport">
+          <div id="riskKgChart" class="overflow-x-auto"></div>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl shadow">
+        <button class="collapsible-header w-full flex justify-between items-center p-4 text-left" data-target="risk-methodology-body">
+          <span class="font-semibold">How this score is calculated</span>
+          <i class="fa-solid fa-chevron-down text-slate-400"></i>
+        </button>
+        <div id="risk-methodology-body" class="collapsible-body hidden border-t p-4 text-sm text-slate-600 space-y-3">
+          <p>
+            This score is built from a one-off correlation study of this farm's own harvest records
+            against its weather history, reaching back to 1987: the four factors below were the ones
+            that lined up best with a bigger or smaller harvest <em>and</em> that measure genuinely
+            different things, rather than four ways of restating the same one. It is <em>not</em> a
+            generic agronomy model, and it isn't recalculated live - the driver list itself only
+            changes if this study is redone.
+          </p>
+          <div id="riskMethodologyDrivers" class="space-y-2"></div>
+          <p>
+            Each factor contributes up to 25 risk points, scaled between the best and worst value seen
+            across the reference seasons (2012 onward, once the replanted orchard was bearing) - so
+            25/25 means "as bad as the worst season on file for that factor", not an absolute
+            threshold. Points are summed to a 0-100 score once every factor's calendar window has
+            closed for that season; a window still open just isn't counted yet (never assumed to be
+            zero risk), which is why the current season shows a partial "score so far" until its last
+            window closes.
+          </p>
+          <p class="font-medium text-slate-700">Honest limits:</p>
+          <ul class="list-disc pl-5 space-y-1">
+            <li>Weather explains roughly a quarter to a half of this farm's swing from season to
+              season. That is real signal, but most of what makes a season good or bad is something
+              this score cannot see - treat it as one input among several, not a verdict.</li>
+            <li>Many factor-and-window combinations were tested to arrive at these four, and in any
+              such search some of what looks like signal is chance. These four were kept because they
+              held up across separate stretches of the farm's history, not because they scored well
+              once.</li>
+            <li>Contrary to what is often expected of lychees, this farm's own record shows no
+              alternate-bearing pattern: across 35 back-to-back season pairs, last season's crop tells
+              you essentially nothing about this one. An earlier version of this note claimed the
+              opposite - the longer record does not support it.</li>
+          </ul>
+          <p id="riskMethodologyForecastHeading" class="font-medium text-slate-700 hidden">About the Harvest Forecast card above:</p>
+          <ul id="riskMethodologyForecast" class="list-disc pl-5 space-y-1"></ul>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="owner.js"></script>
+</body>
+</html>

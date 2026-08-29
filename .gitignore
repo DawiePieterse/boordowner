@@ -1,0 +1,14 @@
+# Nothing here runs yet; these are what it will produce once it does.
+__pycache__/
+*.pyc
+.venv/
+
+# This app owns its own database - weather history and the seasons before
+# Boord. Neither belongs in the repository: the weather is re-downloadable
+# and the harvest history is one farm's own records.
+data/
+*.db
+*.db-wal
+*.db-shm
+
+.DS_Store

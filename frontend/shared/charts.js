@@ -1,4 +1,5 @@
-// Minimal dependency-free SVG chart helpers for the admin Analysis tab.
+// Minimal dependency-free SVG chart helpers for the Analysis, Weather and
+// Risk tabs.
 // No vendored charting library in this app - these cover the line/bar
 // shapes the dashboard needs without adding an offline-cache dependency.
 const LWCharts = (() => {

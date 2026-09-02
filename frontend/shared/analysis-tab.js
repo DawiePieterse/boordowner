@@ -1,7 +1,8 @@
 // Analysis tab (historical 2020-2025 vs current season): season pace,
 // per-block/variety yield, season length, monthly volume, PDF export.
-// Shared between the admin app (/api/analysis/summary, JWT auth) and the
-// Owner View (/api/owner-view/analysis, token auth) - identical markup
+// Renders the Analysis tab from /api/analysis/summary. Once shared with
+// Boord's admin app and the old token-authenticated Owner View, both of
+// which are gone - see weather-tab.js. Identical markup
 // (same element IDs) and identical figures, so this one module renders
 // both rather than the two screens carrying their own copies to drift.
 const LWAnalysisTab = (() => {

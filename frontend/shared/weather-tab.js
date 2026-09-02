@@ -1,9 +1,15 @@
 // Weather tab (historical weather, 1987-present): an interactive chart
 // filterable by calendar year and by which measurements to plot, a dynamic
-// legend, and PDF export. Shared between the admin app
-// (/api/weather/history, JWT auth) and the Owner View
-// (/api/owner-view/weather, token auth) - identical markup (same element
-// IDs), same as analysis-tab.js, so this one module renders both.
+// legend, and PDF export. Renders the Weather tab from
+// /api/weather/history.
+//
+// It was written to serve two callers - Boord's admin app and the old
+// Owner View, which reached the same figures through /api/owner-view/*
+// with a shared link token. Both are gone: the tab left Boord with the
+// history tables, and the link was replaced by per-user accounts. The
+// module keeps its screen-agnostic shape (the caller supplies the fetch)
+// because that is still the cleaner seam, not because anything else
+// renders it.
 //
 // Years are always overlaid on a shared 1 Jan - 31 Dec x-axis, one line per
 // selected year, defaulting to the most recent year on file. There used to

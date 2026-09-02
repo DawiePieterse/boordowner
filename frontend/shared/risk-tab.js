@@ -10,9 +10,9 @@
 // current-season kg scenarios - Favorable/Expected/Unfavorable - built by
 // blending real short-range weather forecast with historical-scenario
 // ranges for whatever part of the season hasn't happened yet.
-// Shared between the admin app (/api/risk/summary + /api/risk/forecast,
-// JWT auth) and the Owner View (/api/owner-view/risk + /risk-forecast,
-// token auth), same split as analysis-tab.js and weather-tab.js.
+// Renders the Risk tab from /api/risk/summary + /api/risk/forecast. Once
+// shared with Boord's admin app and the old token-authenticated Owner
+// View, both of which are gone - see weather-tab.js, same split as analysis-tab.js and weather-tab.js.
 const LWRiskTab = (() => {
   let _data = null;
   let _bound = false;

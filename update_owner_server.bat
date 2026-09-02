@@ -198,7 +198,11 @@ if "!CURTAG!"=="!NEWTAG!" (
 
 echo.
 echo ==^> Installing any new dependencies...
-"%~dp0backend\.venv\Scripts\pip.exe" install --quiet --disable-pip-version-check -r "%~dp0backend\requirements.txt"
+:: python -m pip, not Scripts\pip.exe: that stub is generated with the venv
+:: and is an unsigned executable, which Windows Application Control blocks on
+:: a machine that enforces one. The venv's python.exe is a copy of the signed
+:: PSF binary and runs fine.
+"%VENV_PY%" -m pip install --quiet --disable-pip-version-check -r "%~dp0backend\requirements.txt"
 
 :: Ask the venv directly rather than trusting pip's exit code. A release that
 :: adds a dependency cannot run without it, so a half-finished install would

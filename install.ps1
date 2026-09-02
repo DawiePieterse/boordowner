@@ -175,12 +175,28 @@ try {
     if (-not (Test-Path $VenvDir)) { & $pythonExe -m venv $VenvDir; Write-Ok "Created virtual environment" }
     else { Write-Ok "Virtual environment already exists" }
     $venvPython = Join-Path $VenvDir "Scripts\python.exe"
-    $venvPip = Join-Path $VenvDir "Scripts\pip.exe"
+    # Deliberately NOT $VenvDir\Scripts\pip.exe. That is a launcher stub
+    # generated when the venv is created - a brand-new unsigned executable,
+    # which Windows Application Control (Smart App Control / WDAC / AppLocker)
+    # blocks outright on a machine that enforces one: "Program 'pip.exe'
+    # failed to run: An Application Control policy has blocked this file".
+    # The venv's python.exe is a COPY of the Python Software Foundation
+    # binary and keeps its Authenticode signature, so `python -m pip` runs
+    # where `pip.exe` cannot. Same pip, same result, one fewer unsigned
+    # binary - so this is the right call even where nothing is enforcing.
 
     # --- Step 5: Dependencies ---
     Write-Step "Installing app dependencies (first run can take a few minutes)..."
-    & $venvPip install --quiet --disable-pip-version-check -r (Join-Path $BackendDir "requirements.txt")
-    if ($LASTEXITCODE -ne 0) { Write-Err "Dependency install failed. Check the internet connection and re-run."; exit 1 }
+    & $venvPython -m pip install --quiet --disable-pip-version-check -r (Join-Path $BackendDir "requirements.txt")
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "Dependency install failed."
+        Write-Err "Usually this is no internet, or pip being blocked by a proxy."
+        Write-Err "If the error above mentions an Application Control policy, this PC"
+        Write-Err "enforces one and has blocked a binary inside .venv. Nothing here"
+        Write-Err "needs the policy relaxed - tell whoever manages it which file was"
+        Write-Err "blocked. Re-running this installer is safe; it reuses the venv."
+        exit 1
+    }
     Write-Ok "Dependencies installed"
 
     # --- Step 6: Launcher ---

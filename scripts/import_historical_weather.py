@@ -15,8 +15,11 @@ safely with scripts/import_historical_weather_archive.py's older backfill
 (1987 up to the day before HISTORY_START_DATE) regardless of which one
 runs first or how many times either is re-run.
 
-Usage (run with the backend's own venv so sqlmodel etc. are on the path):
-    backend/.venv/bin/python3 scripts/import_historical_weather.py
+Usage (run with the backend's own venv so sqlmodel etc. are on the path,
+and BOORD_DB_PATH pointing at the farm's Boord database - the farm GPS is
+read from there):
+    BOORD_DB_PATH=/path/to/Boord/data/boord.db \\
+        backend/.venv/bin/python3 scripts/import_historical_weather.py
 """
 import os
 import sys
@@ -27,16 +30,17 @@ sys.path.insert(0, BACKEND_DIR)
 
 from sqlmodel import Session, delete  # noqa: E402
 
-from db import engine  # noqa: E402
-from migrate import run_migrations  # noqa: E402
-from models import WeatherHistory  # noqa: E402
+from db import boord_engine, init_owner_db, owner_engine as engine  # noqa: E402
+from models_owner import WeatherHistory  # noqa: E402
 from weather import HISTORY_START_DATE, farm_coords, fetch_historical_hourly, parse_hourly_rows  # noqa: E402
 
 
 def main():
-    run_migrations()
-    with Session(engine) as session:
-        coords = farm_coords(session)
+    # Needs BOORD_DB_PATH set (the farm's Boord install) - farm_coords reads
+    # the GPS from Boord's Settings.
+    init_owner_db()
+    with Session(boord_engine) as boord:
+        coords = farm_coords(boord)
     if coords is None:
         print("No farm location set - skipping the weather import.\n"
               "Set the farm's GPS latitude/longitude in Admin -> Settings first,\n"

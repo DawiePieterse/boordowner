@@ -98,11 +98,20 @@ const LWAnalysisTab = (() => {
     `).join("");
   }
 
+  // The anchor (month + day) the backend computed this payload against -
+  // Boord's SystemSetting.season_start_month/_day, travelling with the data
+  // because a season_day axis and a month ordering mean nothing without it.
+  function _anchor() {
+    const a = (_data && _data.season_anchor) || {};
+    return { month: parseInt(a.month, 10) || 1, day: parseInt(a.day, 10) || 1 };
+  }
+
   // season_day -> real date, using a fixed non-leap reference year purely for
   // formatting (the actual year never appears on the axis). season_day is
-  // days since 1 Aug (1 = 1 Aug), matching the backend's season-day anchor.
+  // 1-indexed from the anchor date, matching the backend's timeutil.season_day.
   function _seasonDayToDate(seasonDay) {
-    return new Date(2001, 7, seasonDay); // month 7 = August (0-indexed)
+    const { month, day } = _anchor();
+    return new Date(2001, month - 1, day + seasonDay - 1);
   }
   function _seasonDayLabel(seasonDay) {
     return _seasonDayToDate(seasonDay).toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -284,7 +293,17 @@ const LWAnalysisTab = (() => {
     LWCharts.rangeBarChart(document.getElementById("seasonLengthChart"), { rows });
   }
 
-  const MONTH_ORDER = ["Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul"];
+  const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  // The twelve months in season order, starting at the anchor month, so a
+  // season running Aug-Dec reads left to right instead of wrapping around a
+  // calendar year it doesn't follow. Matches the abbreviations the backend
+  // emits (analysis.py's strftime("%b")).
+  function _monthOrder() {
+    const start = _anchor().month - 1;
+    return Array.from({ length: 12 }, (_, i) => MONTH_NAMES[(start + i) % 12]);
+  }
 
   function renderMonthlyHeatmap(data) {
     // Latest season at top; a year with no by_month entries yet (the current
@@ -295,7 +314,7 @@ const LWAnalysisTab = (() => {
 
     const present = new Set();
     monthly.forEach((y) => Object.keys(y.by_month).forEach((m) => present.add(m)));
-    const colLabels = MONTH_ORDER.filter((m) => present.has(m));
+    const colLabels = _monthOrder().filter((m) => present.has(m));
     const values = monthly.map((y) => colLabels.map((m) => (y.by_month[m] ? y.by_month[m].kg : null)));
     const cellText = monthly.map((y) => colLabels.map((m) => {
       const cell = y.by_month[m];

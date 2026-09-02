@@ -1,7 +1,11 @@
-# Nothing here runs yet; these are what it will produce once it does.
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
+
+# Written by install.ps1 with this machine's own absolute paths (venv
+# location, Boord's boord.db path) - not portable, so not committed.
+start_owner_server.bat
 
 # This app owns its own database - weather history and the seasons before
 # Boord. Neither belongs in the repository: the weather is re-downloadable

@@ -40,8 +40,11 @@ another place's weather in the table for good unless somebody knew to come
 and run this by hand with --force. Now the farm corrects its coordinates
 and the next update_server.bat refetches on its own.
 
-Usage (run with the backend's own venv so sqlmodel etc. are on the path):
-    backend/.venv/bin/python3 scripts/import_historical_weather_archive.py [--force]
+Usage (run with the backend's own venv so sqlmodel etc. are on the path,
+and BOORD_DB_PATH pointing at the farm's Boord database - the farm GPS is
+read from there):
+    BOORD_DB_PATH=/path/to/Boord/data/boord.db \\
+        backend/.venv/bin/python3 scripts/import_historical_weather_archive.py [--force]
 """
 import os
 import sys
@@ -52,9 +55,8 @@ sys.path.insert(0, BACKEND_DIR)
 
 from sqlmodel import Session, delete, select  # noqa: E402
 
-from db import engine  # noqa: E402
-from migrate import run_migrations  # noqa: E402
-from models import WeatherHistory  # noqa: E402
+from db import boord_engine, init_owner_db, owner_engine as engine  # noqa: E402
+from models_owner import WeatherHistory  # noqa: E402
 from weather import (ARCHIVE_CHUNK_YEARS, ARCHIVE_START_DATE, HISTORY_START_DATE,  # noqa: E402
                       at_location, chunk_date_range, farm_coords, fetch_archive_hourly,
                       parse_hourly_rows)
@@ -85,20 +87,20 @@ def load_rows(lat, lon):
 
 
 def main():
-    run_migrations()
+    # Needs BOORD_DB_PATH set - farm_coords reads Boord's Settings.
+    init_owner_db()
     force = "--force" in sys.argv
+    with Session(boord_engine) as boord:
+        coords = farm_coords(boord)
+    if coords is None:
+        print("No farm location set - skipping the weather import.\n"
+              "Set the farm's GPS latitude/longitude in Boord -> Settings first,\n"
+              "then run this again. Nothing was imported: weather fetched for the\n"
+              "wrong place would look completely normal and quietly feed the Risk\n"
+              "indicator and Harvest Forecast.")
+        return
+    lat, lon = coords
     with Session(engine) as session:
-        # The location comes first now: whether this range is already
-        # imported depends on where it was imported FOR.
-        coords = farm_coords(session)
-        if coords is None:
-            print("No farm location set - skipping the weather import.\n"
-                  "Set the farm's GPS latitude/longitude in Admin -> Settings first,\n"
-                  "then run this again. Nothing was imported: weather fetched for the\n"
-                  "wrong place would look completely normal and quietly feed the Risk\n"
-                  "indicator and Harvest Forecast.")
-            return
-        lat, lon = coords
         if not force and already_imported(session, lat, lon):
             print(f"Archive weather already covers {ARCHIVE_START_DATE} to "
                   f"{(date.fromisoformat(HISTORY_START_DATE) - timedelta(days=1)).isoformat()} "

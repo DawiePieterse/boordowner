@@ -9,7 +9,9 @@ from typing import Iterator, Optional
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
-from models import SystemSetting, WeatherHistory
+import db
+from models_boord import SystemSetting
+from models_owner import WeatherHistory
 
 _WMO_CONDITION = {
     0: "Clear", 1: "Partly Cloudy", 2: "Partly Cloudy", 3: "Overcast",
@@ -104,8 +106,9 @@ HOURLY_FIELDS = ",".join([
     "sunshine_duration",
 ])
 
-def farm_coords(session: Session) -> Optional[tuple]:
-    """The farm's GPS position from Settings, or None if it isn't set yet.
+def farm_coords(boord: Session) -> Optional[tuple]:
+    """The farm's GPS position from Boord's Settings, or None if it isn't set
+    yet. Reads Boord's SystemSetting, so it takes a boord_session.
 
     This used to fall back to a fixed pair of coordinates when Settings was
     blank. That was survivable while there was one farm, because the fallback
@@ -122,10 +125,27 @@ def farm_coords(session: Session) -> Optional[tuple]:
     Note the `is not None` checks: a plain truthiness test treats latitude 0
     (the equator) and longitude 0 (Greenwich) as "unset".
     """
-    settings = session.exec(select(SystemSetting)).first()
+    settings = boord.exec(select(SystemSetting)).first()
     if settings and settings.gps_lat is not None and settings.gps_lon is not None:
         return settings.gps_lat, settings.gps_lon
     return None
+
+
+def farm_coords_and_release(boord: Session) -> Optional[tuple]:
+    """farm_coords(), then immediately hand the Boord connection back.
+
+    Every caller of this is about to make an Open-Meteo request - a few
+    seconds for a forecast, minutes for a full 1987-onward backfill - and
+    Boord's database must not be held open across that. Boord migrates it on
+    its own startup and copies it before doing so; a read left open through
+    one of those would see the schema move underneath it.
+
+    Session.close() is idempotent, and the caller's session is dead to us
+    afterwards by convention: read the coordinates, let go, then fetch.
+    """
+    coords = farm_coords(boord)
+    boord.close()
+    return coords
 
 
 def different_location(lat: float, lon: float):
@@ -307,12 +327,17 @@ def fetch_hourly_range(lat: float, lon: float, start: date, end: date) -> list:
     return rows
 
 
-def sync_recent_weather(session: Session) -> dict:
+def sync_recent_weather(owner: Session, boord: Session) -> dict:
     """Best-effort catch-up: fetches whatever hours are missing since the
     last stored row and appends them (never replaces). Called as a side
     effect of loading the Weather tab, so a network hiccup here must never
     stop the tab from rendering whatever history is already stored - same
     "never block the caller" tone as fetch_weather() above.
+
+    Reads/writes WeatherHistory on `owner`; reads the farm location on
+    `boord`. The append is serialised on db.weather_append_lock so two
+    simultaneous tab-opens don't both insert the same hour and collide on
+    the timestamp unique index.
 
     Data is hourly, so once the latest stored row already falls in the
     current hour there is nothing new to fetch - that's the whole throttle,
@@ -325,14 +350,15 @@ def sync_recent_weather(session: Session) -> dict:
     still return the already-stored data within that budget, rather than
     the tab hanging past it and reading as fully offline."""
     try:
-        latest = session.exec(
+        latest = owner.exec(
             select(WeatherHistory).order_by(WeatherHistory.timestamp.desc())
         ).first()
         now = datetime.now()
         if latest and latest.timestamp >= now.replace(minute=0, second=0, microsecond=0):
             return {"synced": 0}
 
-        coords = farm_coords(session)
+        # Released before the fetch below - see farm_coords_and_release().
+        coords = farm_coords_and_release(boord)
         if coords is None:
             # No location set: append nothing rather than guess. Callers
             # surface this as "set your farm location", not as an error.
@@ -355,9 +381,10 @@ def sync_recent_weather(session: Session) -> dict:
         new_rows = [WeatherHistory(**r) for r in rows
                     if latest is None or r["timestamp"] > latest.timestamp]
         if new_rows:
-            session.add_all(new_rows)
-            session.commit()
+            with db.weather_append_lock:
+                owner.add_all(new_rows)
+                owner.commit()
         return {"synced": len(new_rows)}
     except Exception:
-        session.rollback()
+        owner.rollback()
         return {"synced": 0, "error": True}

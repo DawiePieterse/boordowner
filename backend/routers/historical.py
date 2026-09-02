@@ -32,10 +32,10 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy import func
 from sqlmodel import Session, delete, select
 
-from db import get_session
+from db import get_owner_session
 from excel_io import parse_uploaded_table
-from models import HistoricalAnnualYield, HistoricalHarvest
-from security import get_current_admin
+from models_owner import HistoricalAnnualYield, HistoricalHarvest
+from security import get_current_manager
 
 router = APIRouter(prefix="/api", tags=["historical"])
 
@@ -47,7 +47,7 @@ router = APIRouter(prefix="/api", tags=["historical"])
 _MAX_REJECT_RATIO = 0.5
 
 
-def earliest_history_season(session: Session) -> Optional[int]:
+def earliest_history_season(owner: Session) -> Optional[int]:
     """The oldest season this farm has loaded, across both history tables,
     or None if it has loaded neither.
 
@@ -62,8 +62,8 @@ def earliest_history_season(session: Session) -> Optional[int]:
     reaches back years.
     """
     return min(
-        (y for y in (session.exec(select(func.min(HistoricalHarvest.season_year))).one(),
-                     session.exec(select(func.min(HistoricalAnnualYield.season_year))).one())
+        (y for y in (owner.exec(select(func.min(HistoricalHarvest.season_year))).one(),
+                     owner.exec(select(func.min(HistoricalAnnualYield.season_year))).one())
          if y is not None),
         default=None,
     )
@@ -126,8 +126,8 @@ def _check_usable(rows: list, kept: int, rejected: list) -> None:
 
 
 @router.post("/historical-harvest/import")
-async def import_historical_harvest(file: UploadFile, session: Session = Depends(get_session),
-                                     admin=Depends(get_current_admin)):
+async def import_historical_harvest(file: UploadFile, owner: Session = Depends(get_owner_session),
+                                     mgr=Depends(get_current_manager)):
     """Daily per-block kg from seasons before the app existed.
 
     Columns: block_id, date, kg, and optionally season_year and estimated.
@@ -156,17 +156,17 @@ async def import_historical_harvest(file: UploadFile, session: Session = Depends
             rejected.append(f"row {i}: {e}")
 
     _check_usable(rows, len(records), rejected)
-    session.exec(delete(HistoricalHarvest))
-    session.add_all(records)
-    session.commit()
+    owner.exec(delete(HistoricalHarvest))
+    owner.add_all(records)
+    owner.commit()
     seasons = sorted({r.season_year for r in records})
     return {"imported": len(records), "rejected": len(rejected), "rejected_detail": rejected[:5],
             "seasons": seasons}
 
 
 @router.post("/historical-annual-yield/import")
-async def import_historical_annual_yield(file: UploadFile, session: Session = Depends(get_session),
-                                          admin=Depends(get_current_admin)):
+async def import_historical_annual_yield(file: UploadFile, owner: Session = Depends(get_owner_session),
+                                          mgr=Depends(get_current_manager)):
     """Season totals from further back than daily records reach.
 
     Columns: season_year, kg, and optionally block_id and estimated. A blank
@@ -194,9 +194,9 @@ async def import_historical_annual_yield(file: UploadFile, session: Session = De
             rejected.append(f"row {i}: {e}")
 
     _check_usable(rows, len(records), rejected)
-    session.exec(delete(HistoricalAnnualYield))
-    session.add_all(records)
-    session.commit()
+    owner.exec(delete(HistoricalAnnualYield))
+    owner.add_all(records)
+    owner.commit()
     seasons = sorted({r.season_year for r in records})
     return {"imported": len(records), "rejected": len(rejected), "rejected_detail": rejected[:5],
             "seasons": seasons}

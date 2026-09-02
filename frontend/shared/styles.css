@@ -1,0 +1,79 @@
+:root {
+  --boord-blue: #0A2F6B;
+  --boord-red: #C8102E;
+  --boord-green: #16a34a;
+  --boord-yellow: #eab308;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  /* Keep the browser's native pull-to-refresh out of the way of LWPTR's. */
+  overscroll-behavior-y: contain;
+}
+
+/* Offline banner injected by Boord.offlineBanner() (shared/api.js). */
+.offline-banner {
+  background: #fef3c7;
+  color: #92400e;
+  border-bottom: 1px solid #fcd34d;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-align: center;
+}
+.offline-banner.hidden { display: none; }
+
+/* Pull-to-refresh indicator (shared/ptr.js). */
+.ptr-indicator {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -56px);
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--boord-blue);
+  font-size: 1.1rem;
+  z-index: 60;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+.ptr-indicator.ready { color: var(--boord-green); }
+.ptr-indicator.spinning i { animation: ptr-spin 0.8s linear infinite; }
+@keyframes ptr-spin { to { transform: rotate(360deg); } }
+
+.boord-header { background: var(--boord-blue); color: white; }
+.boord-btn-primary { background: var(--boord-blue); color: white; }
+.boord-btn-primary:active { opacity: 0.85; }
+.boord-btn-danger { background: var(--boord-red); color: white; }
+
+.urgency-green { background-color: #dcfce7; border-left: 6px solid var(--boord-green); }
+.urgency-yellow { background-color: #fef9c3; border-left: 6px solid var(--boord-yellow); }
+.urgency-red { background-color: #fee2e2; border-left: 6px solid var(--boord-red); }
+
+.keypad-btn {
+  font-size: 1.25rem;
+  padding: 0.75rem 0;
+  border-radius: 0.75rem;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+}
+.keypad-btn:active { background: #e2e8f0; }
+
+.tab-btn { flex: 1; text-align: center; padding: 0.6rem 0; font-size: 0.8rem; }
+.tab-btn.active { color: var(--boord-blue); font-weight: 600; border-bottom: 3px solid var(--boord-blue); }
+
+.subtab-btn { padding: 0.4rem 1rem; border-radius: 999px; font-size: 0.85rem; background: #e2e8f0; color: #334155; }
+.subtab-btn.active { background: var(--boord-blue); color: white; font-weight: 600; }
+
+.date-preset-btn.active { background: var(--boord-blue); color: white; font-weight: 600; }
+
+.toast {
+  position: fixed; bottom: 5rem; left: 50%; transform: translateX(-50%);
+  background: #111827; color: white; padding: 0.6rem 1.2rem; border-radius: 999px;
+  font-size: 0.9rem; z-index: 50; opacity: 0; transition: opacity 0.2s;
+}
+.toast.show { opacity: 1; }

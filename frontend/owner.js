@@ -1,17 +1,39 @@
-// Owner View: read-only dashboard, no login - access is a single token in
-// the URL (?key=...). See backend/routers/owner_view.py.
+// Boord Owner: read-only dashboard. Access is a per-user account - the
+// session JWT lives in localStorage under "boord_owner_token" (see
+// shared/api.js). Managers get an extra Users tab.
 
-const OWNER_KEY = new URLSearchParams(location.search).get("key") || "";
 let _systemSettings = null;
+let _me = null;  // { username, is_manager, must_change_password } from /api/owner-auth/me
 
-function showDenied() {
-  document.getElementById("deniedScreen").classList.remove("hidden");
-  document.getElementById("app").classList.add("hidden");
+function _show(id) {
+  ["loginScreen", "passwordSetupScreen", "app"].forEach((s) => {
+    document.getElementById(s).classList.toggle("hidden", s !== id);
+  });
+  // Modals live outside #app, so a screen change has to close them itself -
+  // otherwise a revoked session mid-dialog leaves the login form behind a
+  // dimmed overlay that nothing can dismiss.
+  ["addUserModal", "oneTimePasswordModal"].forEach((m) => {
+    document.getElementById(m).classList.add("hidden");
+  });
+}
+
+function showLogin() { _show("loginScreen"); }
+function showPasswordSetup() { _show("passwordSetupScreen"); }
+
+// A real HTTP 401/403 on an authenticated call means the session is no
+// longer good (expired, password changed elsewhere, account disabled). Drop
+// the token and send the user back to sign in. A NETWORK failure is not this
+// - callers handle that separately as "offline".
+function sessionExpired() {
+  Boord.clearToken();
+  _me = null;
+  Boord.toast("Session ended - sign in again");
+  showLogin();
 }
 
 function updateBannerFarmName() {
   const el = document.getElementById("headerFarmName");
-  if (el) el.textContent = (_systemSettings && _systemSettings.farm_name) || "Boord";
+  if (el) el.textContent = (_systemSettings && _systemSettings.packhouse_name) || "Boord";
 }
 
 function updateBannerClock() {
@@ -27,12 +49,12 @@ async function updateBannerWeather() {
   const el = document.getElementById("headerWeather");
   if (!el) return;
   try {
-    const w = await Boord.api("/api/weather/current");
+    const w = await Boord.api("/api/weather/current", { auth: true });
     if (w && w.no_location) {
       // The farm's GPS isn't set. Say so rather than leaving the strip blank:
       // Weather, Risk and the Harvest Forecast all stay empty until it is,
       // and a silent gap gives no clue why.
-      el.innerHTML = `<i class="fa-solid fa-location-dot"></i> Set farm location in Settings`;
+      el.innerHTML = `<i class="fa-solid fa-location-dot"></i> Set pack house location in Settings`;
     } else if (w && w.temp !== undefined && w.temp !== null) {
       const icon = Boord.weatherIcon(w.condition);
       el.innerHTML = `<i class="fa-solid ${icon}"></i> ${Math.round(w.temp)}°C · ${w.condition}${w.humidity != null ? ` · ${w.humidity}% humidity` : ""}`;
@@ -50,41 +72,74 @@ function bindCollapsibles() {
   });
 }
 
+// Shows one tab and loads it. Also used on sign-in to land everyone on the
+// Dashboard: without that, signing out while on the Users tab and back in as
+// somebody who is not a manager left the Users panel on screen, its button
+// hidden but its content still the visible one.
+function activateTab(name) {
+  document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".tab-content").forEach((c) => c.classList.add("hidden"));
+  const panel = document.getElementById(`tab-${name}`);
+  if (panel) panel.classList.remove("hidden");
+  if (name === "analysis") loadAnalysis();
+  else if (name === "weather") loadWeather();
+  else if (name === "risk") loadRisk();
+  else if (name === "users") loadUsers();
+}
+
+// The one download this app offers: every harvest figure on file, 1987 to
+// the current season, in one workbook. It needs the bearer token, so it
+// cannot be a plain <a href> - fetch it, then hand the blob to the browser.
+function bindHistoricalDataDownload() {
+  const btn = document.getElementById("historicalDataBtn");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Building...`;
+    try {
+      // Reads both databases and pivots every season it finds, so it is
+      // slower than the tab loads around it.
+      const blob = await Boord.api("/api/reports/historical-harvest-data",
+                                   { auth: true, timeoutMs: 60000 });
+      Boord.downloadBlob(blob, "Historical_Harvest_Data.xlsx");
+    } catch (e) {
+      if (Boord.isAuthError(e)) { sessionExpired(); return; }
+      console.error("Historical Harvest Data download failed:", e);
+      Boord.toast("Could not build the workbook");
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = original;
+    }
+  });
+}
+
 function bindTabs() {
   document.querySelectorAll(".tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      document.querySelectorAll(".tab-content").forEach((c) => c.classList.add("hidden"));
-      document.getElementById(`tab-${btn.dataset.tab}`).classList.remove("hidden");
-      if (btn.dataset.tab === "analysis") loadAnalysis();
-      else if (btn.dataset.tab === "weather") loadWeather();
-      else if (btn.dataset.tab === "risk") loadRisk();
-    });
+    btn.addEventListener("click", () => activateTab(btn.dataset.tab));
   });
 }
 
 async function loadAnalysis() {
   await LWAnalysisTab.load(
-    () => Boord.api(`/api/owner-view/analysis?token=${encodeURIComponent(OWNER_KEY)}`),
-    { onAuthError: () => showDenied() },
+    () => Boord.api("/api/analysis/summary", { auth: true }),
+    { onAuthError: sessionExpired },
   );
 }
 
 async function loadWeather() {
   await LWWeatherTab.load(
-    () => Boord.api(`/api/owner-view/weather?token=${encodeURIComponent(OWNER_KEY)}`),
-    { onAuthError: () => showDenied() },
+    () => Boord.api("/api/weather/history", { auth: true }),
+    { onAuthError: sessionExpired },
   );
 }
 
 async function loadRisk() {
   await LWRiskTab.load(
-    () => Boord.api(`/api/owner-view/risk?token=${encodeURIComponent(OWNER_KEY)}`),
-    // See the matching comment in admin/app.js's loadRisk() - this call does
-    // real work the default 8s network timeout isn't built for.
-    () => Boord.api(`/api/owner-view/risk-forecast?token=${encodeURIComponent(OWNER_KEY)}`, { timeoutMs: 45000 }),
-    { onAuthError: () => showDenied() },
+    () => Boord.api("/api/risk/summary", { auth: true }),
+    // This call does real work the default 8s network timeout isn't built for.
+    () => Boord.api("/api/risk/forecast", { auth: true, timeoutMs: 45000 }),
+    { onAuthError: sessionExpired },
   );
 }
 
@@ -108,7 +163,10 @@ function bindDashboard() {
     seasonBtn: document.getElementById("dashSeasonBtn"),
     startInput: document.getElementById("dashStart"),
     endInput: document.getElementById("dashEnd"),
-    seasonYear: () => (_systemSettings && _systemSettings.current_harvest_year) || new Date().getFullYear(),
+    seasonAnchor: () => ({
+      month: (_systemSettings && _systemSettings.season_start_month) || 1,
+      day: (_systemSettings && _systemSettings.season_start_day) || 1,
+    }),
     onChange: refreshDashboard,
   });
   document.getElementById("dashSupplierFilter").addEventListener("change", refreshDashboard);
@@ -126,7 +184,7 @@ async function loadSuppliers() {
   const cached = Boord.getCachedJSON("boord_cached_suppliers");
   if (cached) renderSupplierOptions(cached);
   try {
-    const suppliers = await Boord.api("/api/suppliers");
+    const suppliers = await Boord.api("/api/suppliers", { auth: true });
     localStorage.setItem("boord_cached_suppliers", JSON.stringify(suppliers));
     renderSupplierOptions(suppliers);
   } catch (e) { /* keep the cached list, or just "All", if this fails */ }
@@ -229,14 +287,14 @@ async function refreshDashboard() {
   let harvesting, inTransit, received, summary;
   try {
     [harvesting, inTransit, received, summary] = await Promise.all([
-      Boord.api(`/api/lots/pending?${qs}`),
-      Boord.api(`/api/lots/in-transit?${qs}`),
-      Boord.api(`/api/lots/received?${qs}`),
-      Boord.api(`/api/owner-view/summary?token=${encodeURIComponent(OWNER_KEY)}&${qs}`),
+      Boord.api(`/api/lots/pending?${qs}`, { auth: true }),
+      Boord.api(`/api/lots/in-transit?${qs}`, { auth: true }),
+      Boord.api(`/api/lots/received?${qs}`, { auth: true }),
+      Boord.api(`/api/dashboard/summary?${qs}`, { auth: true }),
     ]);
   } catch (e) {
-    // A network failure is NOT an invalid key. Only a real HTTP rejection
-    // (bad/expired key) gets the denied screen.
+    // A network failure is NOT an expired session - fall back to cached
+    // figures. Only a real HTTP 401/403 sends the user back to sign in.
     if (Boord.isNetworkError(e)) {
       Boord.setOffline(true);
       const cached = findCachedDashboard(qs);
@@ -248,7 +306,8 @@ async function refreshDashboard() {
       }
       return;
     }
-    showDenied();
+    if (Boord.isAuthError(e)) sessionExpired();
+    else Boord.toast("Could not load the dashboard");
     return;
   }
   Boord.setOffline(false);
@@ -342,56 +401,251 @@ function renderDashboardLists(harvesting, inTransit, received, summary) {
   `).join("") || `<tr><td class="p-2 text-slate-400" colspan="6">No harvest activity in this period</td></tr>`;
 }
 
-// The page is shown before any request is made. Waiting on the server first
-// would leave an owner on an unreachable connection staring at a blank screen
-// for as long as the OS takes to give up on the request.
-async function init() {
-  if (!OWNER_KEY) { showDenied(); return; }
+// --------------------------------------------------------------------------
+// Users tab (managers only)
+// --------------------------------------------------------------------------
+function showOneTimePassword(username, password) {
+  document.getElementById("otpUsername").textContent = username;
+  document.getElementById("otpValue").textContent = password;
+  document.getElementById("oneTimePasswordModal").classList.remove("hidden");
+}
 
-  document.getElementById("appVersion").textContent = `v${Boord.VERSION}`;
-  _systemSettings = Boord.getCachedJSON("boord_cached_settings");
-  updateBannerFarmName();
-  updateBannerClock();
-  setInterval(updateBannerClock, 1000);
+function renderUsers(users) {
+  const rows = document.getElementById("usersRows");
+  rows.innerHTML = users.map((u) => {
+    const isSelf = _me && u.username === _me.username;
+    const role = u.is_manager ? "Manager" : "Viewer";
+    const status = u.disabled ? "Disabled"
+      : u.must_change_password ? "Password not set" : "Active";
+    const btn = (act, label, cls) =>
+      `<button data-act="${act}" data-id="${u.id}" data-user="${u.username}" class="${cls} text-xs px-2 py-1 rounded">${label}</button>`;
+    const actions = isSelf ? '<span class="text-xs text-slate-400">you</span>' : [
+      btn("reset", "Reset password", "bg-slate-200"),
+      btn(u.is_manager ? "demote" : "promote", u.is_manager ? "Make viewer" : "Make manager", "bg-slate-200"),
+      btn(u.disabled ? "enable" : "disable", u.disabled ? "Enable" : "Disable", u.disabled ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"),
+      btn("delete", "Delete", "bg-red-100 text-red-800"),
+    ].join(" ");
+    return `<tr class="border-b">
+      <td class="p-2 font-medium">${u.username}</td>
+      <td class="p-2">${role}</td>
+      <td class="p-2">${status}</td>
+      <td class="p-2 text-right space-x-1">${actions}</td>
+    </tr>`;
+  }).join("") || `<tr><td class="p-2 text-slate-400" colspan="4">No users</td></tr>`;
+}
 
-  bindDashboard();
-  bindCollapsibles();
-  bindTabs();
-  LWAnalysisTab.bind();
-  LWWeatherTab.bind();
-  LWRiskTab.bind();
+async function loadUsers() {
+  if (!_me || !_me.is_manager) return;
+  try {
+    renderUsers(await Boord.api("/api/owner-users", { auth: true }));
+  } catch (e) {
+    if (Boord.isAuthError(e)) return sessionExpired();
+    Boord.toast("Could not load users");
+  }
+}
 
-  Boord.offlineBanner("Offline - data may be out of date");
-  // Refresh in both directions: reconnecting fetches the real figures, and
-  // dropping offline re-runs the same path so the banner states the actual
-  // age of what is on screen instead of a message left over from earlier.
-  Boord.onOfflineChange = () => { refreshActiveTab(); };
-  LWPTR.attach(async () => {
-    await loadSuppliers();
-    await refreshActiveTab();
+async function onUsersAction(act, id, username) {
+  try {
+    if (act === "reset") {
+      const r = await Boord.api(`/api/owner-users/${id}/reset-password`, { method: "POST", auth: true });
+      showOneTimePassword(username, r.initial_password);
+    } else if (act === "promote" || act === "demote") {
+      await Boord.api(`/api/owner-users/${id}`, { method: "PATCH", auth: true, body: { is_manager: act === "promote" } });
+    } else if (act === "disable" || act === "enable") {
+      await Boord.api(`/api/owner-users/${id}`, { method: "PATCH", auth: true, body: { disabled: act === "disable" } });
+    } else if (act === "delete") {
+      if (!confirm(`Delete ${username}? They will not be able to sign in.`)) return;
+      await Boord.api(`/api/owner-users/${id}`, { method: "DELETE", auth: true });
+    }
+    await loadUsers();
+  } catch (e) {
+    // Any 401/403 on an authenticated call means this session is no longer
+    // good - the token was revoked, or this account is no longer a manager.
+    // Everything else (the last-manager guard's 400, say) is a message to read.
+    if (Boord.isAuthError(e)) return sessionExpired();
+    Boord.toast(Boord.errorDetail(e, "That change was not allowed"));
+  }
+}
+
+function openAddUser() {
+  document.getElementById("addUserName").value = "";
+  document.getElementById("addUserManager").checked = false;
+  document.getElementById("addUserError").classList.add("hidden");
+  document.getElementById("addUserModal").classList.remove("hidden");
+  document.getElementById("addUserName").focus();
+}
+
+async function submitAddUser(e) {
+  e.preventDefault();
+  const err = document.getElementById("addUserError");
+  err.classList.add("hidden");
+  const username = document.getElementById("addUserName").value.trim();
+  const isManager = document.getElementById("addUserManager").checked;
+  if (!username) return;
+  try {
+    const r = await Boord.api("/api/owner-users", { method: "POST", auth: true, body: { username, is_manager: isManager } });
+    document.getElementById("addUserModal").classList.add("hidden");
+    showOneTimePassword(username, r.initial_password);
+    await loadUsers();
+  } catch (ex) {
+    if (Boord.isAuthError(ex)) {
+      document.getElementById("addUserModal").classList.add("hidden");
+      return sessionExpired();
+    }
+    err.textContent = Boord.errorDetail(ex, "Could not add that user");
+    err.classList.remove("hidden");
+  }
+}
+
+// --------------------------------------------------------------------------
+// Auth wiring + routing
+// --------------------------------------------------------------------------
+function bindAuthForms() {
+  document.getElementById("loginForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const err = document.getElementById("loginError");
+    err.classList.add("hidden");
+    try {
+      const data = await Boord.login(
+        document.getElementById("loginUsername").value.trim(),
+        document.getElementById("loginPassword").value,
+      );
+      document.getElementById("loginPassword").value = "";
+      if (data.must_change_password) { showPasswordSetup(); return; }
+      await route();
+    } catch (ex) {
+      err.textContent = Boord.isNetworkError(ex)
+        ? "Can't reach the server. Check the connection and try again."
+        : Boord.errorDetail(ex, "Invalid username or password");
+      err.classList.remove("hidden");
+    }
   });
 
-  document.getElementById("app").classList.remove("hidden");
+  document.getElementById("passwordSetupForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const err = document.getElementById("passwordSetupError");
+    err.classList.add("hidden");
+    const pw = document.getElementById("newPassword").value;
+    const confirmPw = document.getElementById("newPasswordConfirm").value;
+    if (pw !== confirmPw) {
+      err.textContent = "The two passwords don't match.";
+      err.classList.remove("hidden");
+      return;
+    }
+    try {
+      const r = await Boord.api("/api/owner-auth/change-password", { method: "POST", auth: true, body: { new_password: pw } });
+      Boord.setToken(r.access_token);
+      document.getElementById("newPassword").value = "";
+      document.getElementById("newPasswordConfirm").value = "";
+      await route();
+    } catch (ex) {
+      // The password rules answer 400; a 401 here means the token that got
+      // us to this screen has since been revoked.
+      if (Boord.isAuthError(ex)) return sessionExpired();
+      err.textContent = Boord.errorDetail(ex, "Could not set that password");
+      err.classList.remove("hidden");
+    }
+  });
 
-  // Show the last figures this device saw before touching the network, so a
-  // phone out of range has something real on screen immediately rather than an
-  // empty dashboard for as long as the OS takes to give up on the request.
+  document.getElementById("logoutBtn").addEventListener("click", () => {
+    Boord.clearToken();
+    _me = null;
+    showLogin();
+  });
+
+  document.getElementById("oneTimePasswordModal").addEventListener("click", (e) => {
+    if (e.target.id === "oneTimePasswordModal" || e.target.id === "otpCloseBtn") {
+      document.getElementById("oneTimePasswordModal").classList.add("hidden");
+    }
+  });
+  document.getElementById("addUserBtn").addEventListener("click", openAddUser);
+  document.getElementById("addUserForm").addEventListener("submit", submitAddUser);
+  document.getElementById("addUserCancel").addEventListener("click", () => {
+    document.getElementById("addUserModal").classList.add("hidden");
+  });
+  document.getElementById("usersRows").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-act]");
+    if (btn) onUsersAction(btn.dataset.act, btn.dataset.id, btn.dataset.user);
+  });
+}
+
+// Decides which screen to show based on the stored token. Called on load,
+// after sign-in, and after the first-login password change.
+async function route() {
+  if (!Boord.getToken()) { showLogin(); return; }
+  try {
+    _me = await Boord.api("/api/owner-auth/me", { auth: true });
+  } catch (e) {
+    if (Boord.isAuthError(e)) { sessionExpired(); return; }
+    // Network error: we have a token but can't check it. Go into the app
+    // anyway so the offline dashboard cache is usable; the first real call
+    // that gets a 401 will bounce back to sign-in.
+    _me = _me || { username: "", is_manager: false, must_change_password: false };
+  }
+  if (_me.must_change_password) { showPasswordSetup(); return; }
+  enterApp();
+}
+
+let _appBound = false;
+
+function enterApp() {
+  document.getElementById("headerUser").textContent = _me.username || "";
+  document.getElementById("usersTabBtn").style.display = _me.is_manager ? "" : "none";
+  if (!_me.is_manager) document.getElementById("usersRows").innerHTML = "";
+  _show("app");
+
+  if (!_appBound) {
+    _appBound = true;
+    document.getElementById("appVersion").textContent = `v${Boord.VERSION}`;
+    _systemSettings = Boord.getCachedJSON("boord_cached_settings");
+    updateBannerFarmName();
+    updateBannerClock();
+    setInterval(updateBannerClock, 1000);
+
+    bindDashboard();
+    bindCollapsibles();
+    bindTabs();
+    bindHistoricalDataDownload();
+    LWAnalysisTab.bind();
+    LWWeatherTab.bind();
+    LWRiskTab.bind();
+
+    Boord.offlineBanner("Offline - data may be out of date");
+    Boord.onOfflineChange = () => { refreshActiveTab(); };
+    LWPTR.attach(async () => {
+      await loadSuppliers();
+      await refreshActiveTab();
+    });
+  }
+
+  activateTab("dashboard");
+
+  // Show the last figures this device saw before touching the network.
   const cachedDash = findCachedDashboard(currentQuery());
   if (cachedDash && renderCachedDashboard(currentQuery())) {
     setOfflineBannerText(`Offline - showing figures from ${describeAge(cachedDash.at)}`);
   }
 
-  // Background from here.
+  refreshAppData();
+}
+
+async function refreshAppData() {
   try {
-    _systemSettings = await Boord.api("/api/system-settings");
+    _systemSettings = await Boord.api("/api/system-settings", { auth: true });
     localStorage.setItem("boord_cached_settings", JSON.stringify(_systemSettings));
     updateBannerFarmName();
   } catch (e) {
+    if (Boord.isAuthError(e)) return sessionExpired();
     if (Boord.isNetworkError(e)) Boord.setOffline(true);
   }
   updateBannerWeather();
   await loadSuppliers();
   await refreshDashboard();
+}
+
+async function init() {
+  bindAuthForms();
+  await route();
 }
 
 if ("serviceWorker" in navigator) {

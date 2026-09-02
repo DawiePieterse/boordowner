@@ -5,11 +5,13 @@ from types import SimpleNamespace
 from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
 
-from db import get_session
-from models import HistoricalAnnualYield, SystemSetting, WeatherHistory
+from db import get_boord_session, get_owner_session
+from models_boord import SystemSetting
+from models_owner import HistoricalAnnualYield, WeatherHistory
 from routers.analysis import build_analysis_summary
-from security import get_current_admin
-from weather import farm_coords, fetch_forecast_hourly, parse_hourly_rows, sync_recent_weather
+from security import get_current_user
+from weather import (farm_coords_and_release, fetch_forecast_hourly, parse_hourly_rows,
+                      sync_recent_weather)
 
 router = APIRouter(prefix="/api/risk", tags=["risk"])
 
@@ -212,7 +214,7 @@ def _risk_points(value, hist_values: list, direction: str):
     return round(25 * max(0.0, min(1.0, frac)), 1)
 
 
-def _compute_driver_state(session: Session) -> dict:
+def _compute_driver_state(boord: Session, owner: Session) -> dict:
     """Shared setup behind both build_risk_summary() and
     build_harvest_forecast(): per-(driver,year) status/value against real
     WeatherHistory, and the reference range each driver is normalized
@@ -224,14 +226,17 @@ def _compute_driver_state(session: Session) -> dict:
     Season totals come from two places, since the reference range now
     reaches back past the app's own daily records: build_analysis_summary()
     for the daily-tracked seasons (2020 on) and HistoricalAnnualYield for
-    the annual-only ones before that (2012-2019)."""
-    settings = session.exec(select(SystemSetting)).first()
+    the annual-only ones before that (2012-2019).
+
+    `boord` supplies SystemSetting; `owner` supplies HistoricalAnnualYield
+    and WeatherHistory. build_analysis_summary needs both."""
+    settings = boord.exec(select(SystemSetting)).first()
     current_year = settings.current_harvest_year if settings else date.today().year
 
-    analysis = build_analysis_summary(session)
+    analysis = build_analysis_summary(boord, owner)
     kg_by_year = {m["year"]: m["total_kg"] for m in analysis["monthly"]}
     annual_totals: dict = defaultdict(float)
-    for a in session.exec(select(HistoricalAnnualYield)).all():
+    for a in owner.exec(select(HistoricalAnnualYield)).all():
         annual_totals[a.season_year] += a.kg
     for year, kg in annual_totals.items():
         # setdefault, not +=: a season tracked day-by-day is already whole
@@ -253,7 +258,7 @@ def _compute_driver_state(session: Session) -> dict:
     # back to 1987 (see scripts/import_historical_weather_archive.py) while
     # this function only ever looks up the reference range plus the current
     # season - without it, that's a 25-year pointless table scan.
-    rows = session.exec(select(WeatherHistory).where(
+    rows = owner.exec(select(WeatherHistory).where(
         WeatherHistory.timestamp >= date(min(all_years), 1, 1))).all()
     by_date = defaultdict(list)
     for r in rows:
@@ -290,7 +295,7 @@ def _compute_driver_state(session: Session) -> dict:
     }
 
 
-def build_risk_summary(session: Session) -> dict:
+def build_risk_summary(boord: Session, owner: Session) -> dict:
     """Critical Season Risk Indicator: a transparent 0-100 score of how this
     season's weather compares to the reference seasons (REFERENCE_START_YEAR
     onward) on the four factors (see DRIVERS above) that best correlated
@@ -333,7 +338,7 @@ def build_risk_summary(session: Session) -> dict:
     season is left out of the sum (never assumed to be zero risk) - see
     "known_count" on each season entry.
     """
-    state = _compute_driver_state(session)
+    state = _compute_driver_state(boord, owner)
     current_year = state["current_year"]
     all_years = state["all_years"]
     value_by_year = state["value_by_year"]
@@ -388,11 +393,11 @@ def build_risk_summary(session: Session) -> dict:
 
 
 @router.get("/summary")
-def risk_summary(session: Session = Depends(get_session), admin=Depends(get_current_admin)):
-    """Risk tab data - see build_risk_summary(). No caller in Boord's own
-    UI since the Risk tab left with the Owner View; kept as that app's API,
-    same as analysis.py/weather.py. See owner-app/README.md."""
-    return build_risk_summary(session)
+def risk_summary(boord: Session = Depends(get_boord_session),
+                 owner: Session = Depends(get_owner_session),
+                 user=Depends(get_current_user)):
+    """Risk tab data - see build_risk_summary()."""
+    return build_risk_summary(boord, owner)
 
 
 # ---------------------------------------------------------------------------
@@ -517,7 +522,7 @@ def _ols_fit(xs: list, ys: list):
     return {"slope": round(slope, 2), "intercept": round(intercept, 1), "r": round(r, 3), "n_seasons": n}
 
 
-def build_harvest_forecast(session: Session) -> dict:
+def build_harvest_forecast(boord: Session, owner: Session) -> dict:
     """Three kg predictions for the CURRENT season - Favorable/Expected/
     Unfavorable - rather than one falsely-precise number, since most of a
     season's outcome still depends on weather that hasn't happened yet.
@@ -548,13 +553,16 @@ def build_harvest_forecast(session: Session) -> dict:
     forecast_unavailable in the return value) rather than the endpoint
     failing outright.
     """
-    sync_recent_weather(session)  # keep "actual" as fresh as the Weather tab would
-    state = _compute_driver_state(session)
+    sync_recent_weather(owner, boord)  # keep "actual" as fresh as the Weather tab would
+    state = _compute_driver_state(boord, owner)
 
     forecast_unavailable = False
     forecast_by_date = defaultdict(list)
     try:
-        coords = farm_coords(session)
+        # Released before the forecast fetch below - _compute_driver_state()
+        # above is the last thing that needs Boord. See
+        # weather.farm_coords_and_release().
+        coords = farm_coords_and_release(boord)
         if coords is None:
             # No farm location set - there is nothing to forecast for. This
             # would also be caught by the except below (unpacking None raises),
@@ -688,8 +696,8 @@ def build_harvest_forecast(session: Session) -> dict:
 
 
 @router.get("/forecast")
-def risk_forecast(session: Session = Depends(get_session), admin=Depends(get_current_admin)):
-    """Harvest Forecast data - see build_harvest_forecast(). No caller in
-    Boord's own UI since the forecast card left with the Owner View; kept
-    as that app's API, same as every other endpoint here."""
-    return build_harvest_forecast(session)
+def risk_forecast(boord: Session = Depends(get_boord_session),
+                  owner: Session = Depends(get_owner_session),
+                  user=Depends(get_current_user)):
+    """Harvest Forecast data - see build_harvest_forecast()."""
+    return build_harvest_forecast(boord, owner)

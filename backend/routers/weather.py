@@ -5,40 +5,36 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlmodel import Session, delete, select
 
-from db import get_session
-from models import WeatherHistory
+from db import get_boord_session, get_owner_session, weather_append_lock
+from models_owner import WeatherHistory
 from routers.historical import earliest_history_season
-from security import get_current_admin
+from security import get_current_manager, get_current_user
 from weather import (ARCHIVE_START_DATE, HISTORY_START_DATE, different_location, farm_coords,
-                      fetch_hourly_range, fetch_weather, foreign_row_count, sync_recent_weather)
+                      farm_coords_and_release, fetch_hourly_range, fetch_weather_cached,
+                      foreign_row_count, sync_recent_weather)
 
 router = APIRouter(prefix="/api/weather", tags=["weather"])
 
 
 @router.get("/current")
-def current_weather(session: Session = Depends(get_session)):
-    """Live conditions at the farm, for the header strip on every screen.
+def current_weather(boord: Session = Depends(get_boord_session), user=Depends(get_current_user)):
+    """Live conditions at the farm, for the header strip.
 
-    This route used to carry its own hardcoded coordinate pair, marked as
-    "for testing" and deliberately not tied to SystemSetting. That made the
-    temperature in every header permanently describe one particular farm -
-    not as a fallback that a correctly configured install would grow out of,
-    but always, even after Settings had been filled in properly.
-
-    It reads the configured location like everything else now, and says so
-    when there isn't one rather than showing somebody else's weather.
-    """
-    coords = farm_coords(session)
+    Cached (fetch_weather_cached, ~10 min TTL) rather than fetched fresh: the
+    header refreshes on every dashboard load and every pull-to-refresh, and
+    several owners may have the page open at once, but Open-Meteo only
+    updates every ~15 minutes anyway. Uncached, this was one upstream request
+    per screen refresh per person for data that had not changed."""
+    coords = farm_coords_and_release(boord)
     if coords is None:
         return {"no_location": True}
-    return fetch_weather(*coords)
+    return fetch_weather_cached(*coords)
 
 
 # ---------------------------------------------------------------------------
-# Weather tab: daily-aggregated history, admin-JWT-gated. GET /history has no
-# caller in Boord's own UI - the Weather tab left with the Owner View - and is
-# kept as the API that app talks to; see owner-app/README.md. POST
-# /history/backfill is live, and is what the setup wizard calls.
+# Weather tab: daily-aggregated history. GET /history is what the Weather tab
+# loads; POST /history/backfill rebuilds the stored record wholesale and is
+# manager-only.
 # ---------------------------------------------------------------------------
 
 # key -> (source column on WeatherHistory, aggregation, unit, decimals).
@@ -64,7 +60,7 @@ def _metrics_public() -> list:
     return [{"key": m["key"], "label": m["label"], "unit": m["unit"], "decimals": m["decimals"]} for m in _METRICS]
 
 
-def build_weather_history(session: Session) -> dict:
+def build_weather_history(owner: Session, boord: Session) -> dict:
     """Daily-aggregated WeatherHistory for the Weather tab - see _METRICS
     for per-metric aggregation. Grouped by plain calendar year (1 Jan -
     31 Dec), deliberately NOT the Aug-anchored harvest season used
@@ -93,7 +89,7 @@ def build_weather_history(session: Session) -> dict:
         col = getattr(WeatherHistory, m["source"])
         agg = {"mean": func.avg, "sum": func.sum, "max": func.max}[m["agg"]]
         aggregates.append(agg(col))
-    rows = session.exec(select(day, *aggregates).group_by(day).order_by(day)).all()
+    rows = owner.exec(select(day, *aggregates).group_by(day).order_by(day)).all()
 
     points = []
     for row in rows:
@@ -103,7 +99,7 @@ def build_weather_history(session: Session) -> dict:
             point[m["key"]] = None if value is None else round(value * m.get("scale", 1), m["decimals"])
         points.append(point)
 
-    last_synced = session.exec(select(func.max(WeatherHistory.timestamp))).one()
+    last_synced = owner.exec(select(func.max(WeatherHistory.timestamp))).one()
 
     # Hours on file that were fetched for somewhere other than where this
     # farm now says it is. Normally zero; anything else means the GPS was
@@ -111,8 +107,8 @@ def build_weather_history(session: Session) -> dict:
     # above is a blend of two places until the backfill is re-run. Reported
     # here because the Weather tab is where somebody would notice the
     # numbers looking wrong and have no way to find out why.
-    coords = farm_coords(session)
-    hours_elsewhere = foreign_row_count(session, *coords) if coords else 0
+    coords = farm_coords(boord)
+    hours_elsewhere = foreign_row_count(owner, *coords) if coords else 0
 
     return {
         "metrics": _metrics_public(),
@@ -125,18 +121,21 @@ def build_weather_history(session: Session) -> dict:
 
 
 @router.get("/history")
-def weather_history(session: Session = Depends(get_session), admin=Depends(get_current_admin)):
-    """Admin-JWT-gated Weather tab data - syncs the latest hours from
-    Open-Meteo first (best-effort, see weather.sync_recent_weather) then
-    returns the full daily-aggregated history."""
-    sync_recent_weather(session)
-    return build_weather_history(session)
+def weather_history(owner: Session = Depends(get_owner_session),
+                    boord: Session = Depends(get_boord_session),
+                    user=Depends(get_current_user)):
+    """Weather tab data - syncs the latest hours from Open-Meteo first
+    (best-effort, see weather.sync_recent_weather) then returns the full
+    daily-aggregated history."""
+    sync_recent_weather(owner, boord)
+    return build_weather_history(owner, boord)
 
 
 @router.post("/history/backfill")
 def backfill_weather_history(years: Optional[int] = Query(None, ge=1, le=200),
-                              session: Session = Depends(get_session),
-                              admin=Depends(get_current_admin)):
+                              owner: Session = Depends(get_owner_session),
+                              boord: Session = Depends(get_boord_session),
+                              mgr=Depends(get_current_manager)):
     """Pull the weather record for the farm's location, `years` back to today.
 
     Same job as scripts/import_historical_weather.py and its 1987-2019
@@ -169,11 +168,12 @@ def backfill_weather_history(years: Optional[int] = Query(None, ge=1, le=200),
     Slow by nature - a year is ~8,760 rows - so callers must set a timeout
     to match what they asked for, not Boord's 8s default.
     """
-    coords = farm_coords(session)
+    # Released before the fetch: a full 1987-onward range is several chunked
+    # requests at a 120s timeout each, and Boord's database must not be held
+    # open for minutes. See farm_coords_and_release().
+    coords = farm_coords_and_release(boord)
     if coords is None:
-        # Not an error: the wizard offers this button before the location
-        # step is necessarily done, and "set your location first" is the
-        # honest answer rather than a 400.
+        # Not an error: "set your location first" is the honest answer.
         return {"no_location": True, "imported": 0}
     lat, lon = coords
 
@@ -197,23 +197,24 @@ def backfill_weather_history(years: Optional[int] = Query(None, ge=1, le=200),
     # Counted before the delete, and only outside the range being replaced:
     # foreign rows inside it were going to be overwritten anyway, so
     # reporting them would turn an ordinary re-run into an alarming number.
-    removed_elsewhere = session.exec(
+    removed_elsewhere = owner.exec(
         select(func.count()).select_from(WeatherHistory)
         .where(different_location(lat, lon), WeatherHistory.timestamp < start)
     ).one()
 
-    session.exec(delete(WeatherHistory).where(WeatherHistory.timestamp >= start))
-    session.exec(delete(WeatherHistory).where(different_location(lat, lon)))
-    session.add_all(rows)
-    session.commit()
+    with weather_append_lock:
+        owner.exec(delete(WeatherHistory).where(WeatherHistory.timestamp >= start))
+        owner.exec(delete(WeatherHistory).where(different_location(lat, lon)))
+        owner.add_all(rows)
+        owner.commit()
     return {"imported": len(rows), "start_date": start.isoformat(), "end_date": end.isoformat(),
             "years": end.year - start.year + 1,
             "lat": lat, "lon": lon,
             "removed_elsewhere": removed_elsewhere,
-            "uncovered_season": _uncovered_season(session, start.year)}
+            "uncovered_season": _uncovered_season(owner, start.year)}
 
 
-def _uncovered_season(session: Session, start_year: int) -> Optional[int]:
+def _uncovered_season(owner: Session, start_year: int) -> Optional[int]:
     """The earliest harvest season this farm has imported, if that is before
     the weather now on file - otherwise None.
 
@@ -230,7 +231,7 @@ def _uncovered_season(session: Session, start_year: int) -> Optional[int]:
     exclusively by a shell script. Now that the caller chooses its own
     depth, the answer is simply to choose more years.
     """
-    earliest = earliest_history_season(session)
+    earliest = earliest_history_season(owner)
     if earliest is None:
         return None
     return earliest if earliest < start_year else None

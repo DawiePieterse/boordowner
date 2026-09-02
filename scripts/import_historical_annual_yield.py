@@ -50,9 +50,8 @@ sys.path.insert(0, BACKEND_DIR)
 
 from sqlmodel import Session, delete  # noqa: E402
 
-from db import engine  # noqa: E402
-from migrate import run_migrations  # noqa: E402
-from models import HistoricalAnnualYield  # noqa: E402
+from db import init_owner_db as run_migrations, owner_engine as engine  # noqa: E402
+from models_owner import HistoricalAnnualYield  # noqa: E402
 
 # The source workbook lives in data/imports/, which is gitignored, NOT in the
 # repository. It used to be committed - which meant every install carried one

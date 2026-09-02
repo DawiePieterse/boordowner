@@ -1,18 +1,55 @@
-"""The Historical Harvest Data report, lifted out of Boord's
-backend/routers/reports.py verbatim.
+"""The Historical Harvest Data workbook.
 
-Every harvest figure the farm had on file, 1987 to the current season, in
-one workbook. It was the last screen standing on HistoricalHarvest and
-HistoricalAnnualYield, and it left Boord with them.
+Every harvest figure this farm has on file, 1987 through the current season,
+in one download. Lifted out of Boord's backend/routers/reports.py, where it
+was the last screen standing on HistoricalHarvest and HistoricalAnnualYield -
+so it left Boord with them.
 
-This will not run as it stands. It is the body of one endpoint, and it
-needs, from what used to surround it in reports.py: the `router`, `REPORTS_DIR`,
-`XLSX_MEDIA`, `_style_header_cell()`, `_block_sort_key()` (which lived in
-analysis.py - see analysis.py here), the openpyxl imports, and the models
-HarvestRecord, HistoricalHarvest, HistoricalAnnualYield, Block.
+Reading it takes BOTH databases, which is the one real difference from the
+Boord original: Block / HarvestRecord / SystemSetting come from Boord's live
+file (read-only), the two history tables from this app's own owner.db. In
+Boord they were all one session.
 """
+import io
+import os
+from datetime import date
+
+import openpyxl
+from fastapi import APIRouter, Depends
+from fastapi.responses import Response
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+from sqlmodel import Session, select
+
+import config
+from db import get_boord_session, get_owner_session, own_farm_block_ids
+from models_boord import Block, HarvestRecord, SystemSetting
+from models_owner import HistoricalAnnualYield, HistoricalHarvest
+from routers.analysis import _block_sort_key
+from security import get_current_user
+from timeutil import season_year_for, to_local
+
+router = APIRouter(prefix="/api/reports", tags=["reports"])
+
+XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+# Every generated workbook is also kept on disk, so it is swept up by
+# whatever backup routine already covers data/ rather than being left in
+# whichever browser downloaded it. Same rule as Boord's reports.
+REPORTS_DIR = os.path.join(config.DATA_DIR, "reports")
+os.makedirs(REPORTS_DIR, exist_ok=True)
+
+
+def _style_header_cell(cell):
+    cell.font = Font(bold=True, color="FFFFFF")
+    cell.fill = PatternFill("solid", fgColor="2E7D32")
+    cell.alignment = Alignment(horizontal="center", vertical="center")
+
+
 @router.get("/historical-harvest-data")
-def historical_harvest_data_report(session: Session = Depends(get_session), admin=Depends(get_current_admin)):
+def historical_harvest_data_report(boord: Session = Depends(get_boord_session),
+                                   owner: Session = Depends(get_owner_session),
+                                   user=Depends(get_current_user)):
     """Historical Harvest Data: every harvest figure this farm has on file,
     1987 through the current season, in one workbook. Not date-range
     filtered like the other reports - there's only ever one of these.
@@ -33,20 +70,32 @@ def historical_harvest_data_report(session: Session = Depends(get_session), admi
         whichever of the above covers each season, so the whole record can
         be read at once. Season Summary names each season's grain in its
         own column so the two are never silently mixed."""
-    settings = session.exec(select(SystemSetting)).first()
+    settings = boord.exec(select(SystemSetting)).first()
     current_year = settings.current_harvest_year if settings else date.today().year
-    blocks = {b.id: b for b in session.exec(select(Block)).all()}
+    anchor_month = settings.season_start_month if settings else 1
+    anchor_day = settings.season_start_day if settings else 1
+    # This farm's blocks only, and the same rule the Analysis tab uses -
+    # Boord's register can hold another grower's orchard, and a workbook
+    # titled "this farm's whole record" must not quietly contain one.
+    own_blocks = own_farm_block_ids(boord)
+    blocks = {b.id: b for b in boord.exec(select(Block)).all() if b.id in own_blocks}
 
     day_kg: dict = {}  # (year, block_id, date) -> kg
     estimated_blocks: set = set()
-    for h in session.exec(select(HistoricalHarvest)).all():
+    for h in owner.exec(select(HistoricalHarvest)).all():
         key = (h.season_year, h.block_id, h.harvest_date)
         day_kg[key] = day_kg.get(key, 0.0) + h.kg
         if h.estimated:
             estimated_blocks.add(h.block_id)
-    for r in session.exec(select(HarvestRecord)).all():
+    for r in boord.exec(select(HarvestRecord)).all():
         local_ts = to_local(r.timestamp)
-        if local_ts is None or local_ts.year != current_year:
+        if local_ts is None:
+            continue
+        # By the season anchor, not the calendar year - see
+        # routers/analysis.py for why the two differ.
+        if season_year_for(local_ts.date(), anchor_month, anchor_day) != current_year:
+            continue
+        if r.block_id not in own_blocks:
             continue
         key = (current_year, r.block_id, local_ts.date())
         day_kg[key] = day_kg.get(key, 0.0) + (r.weight_kg - r.deduction_kg)
@@ -55,7 +104,7 @@ def historical_harvest_data_report(session: Session = Depends(get_session), admi
 
     annual_kg: dict = {}  # (year, block_id) -> kg
     annual_estimated_blocks: set = set()
-    for a in session.exec(select(HistoricalAnnualYield)).all():
+    for a in owner.exec(select(HistoricalAnnualYield)).all():
         key = (a.season_year, a.block_id)
         annual_kg[key] = annual_kg.get(key, 0.0) + a.kg
         if a.estimated:

@@ -4,20 +4,13 @@ from datetime import date
 from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
 
-from db import get_session
-from models import Block, HarvestRecord, HistoricalHarvest, SystemSetting
-from security import get_current_admin
-from timeutil import to_local
+from db import get_boord_session, get_owner_session, own_farm_block_ids
+from models_boord import Block, HarvestRecord, SystemSetting
+from models_owner import HistoricalHarvest
+from security import get_current_user
+from timeutil import season_day, season_year_for, to_local
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
-
-
-def _season_day(d: date, year: int) -> int:
-    """Days since 1 August of the given season year, 1-indexed (1 = 1 Aug).
-    This farm's season runs Aug-Dec, so charts anchor here rather than to
-    1 January - a calendar-year day-of-year axis spends most of its width
-    on months with no harvest at all."""
-    return (d - date(year, 8, 1)).days + 1
 
 
 def _block_sort_key(block_id: str):
@@ -31,48 +24,74 @@ def _block_sort_key(block_id: str):
 
 
 @router.get("/summary")
-def analysis_summary(session: Session = Depends(get_session), admin=Depends(get_current_admin)):
-    """Analysis data - see build_analysis_summary() for what it actually
-    computes. Nothing in Boord's own UI calls this: the Analysis tab left
-    with the Owner View. It is kept as the API that app talks to - see
-    owner-app/README.md, which has the choice still to be made about
-    whether it stays here at all."""
-    return build_analysis_summary(session)
+def analysis_summary(boord: Session = Depends(get_boord_session),
+                     owner: Session = Depends(get_owner_session),
+                     user=Depends(get_current_user)):
+    """Analysis data - see build_analysis_summary() for what it computes."""
+    return build_analysis_summary(boord, owner)
 
 
-def build_analysis_summary(session: Session) -> dict:
+def build_analysis_summary(boord: Session, owner: Session) -> dict:
     """Historical (2020-2025, from HistoricalHarvest) vs current-season
     (from HarvestRecord) comparisons for the Analysis tab: season pace,
     per-block/variety yield, season length, and monthly totals. Aggregated
-    in Python over the full table, same as dashboard_summary - fine at
-    this farm's data volume, and keeps the split-block/typo handling
-    (baked into HistoricalHarvest at import time) out of SQL."""
-    settings = session.exec(select(SystemSetting)).first()
+    in Python over the full table - fine at this farm's data volume, and
+    keeps the split-block/typo handling (baked into HistoricalHarvest at
+    import time) out of SQL.
+
+    Covers this farm's own blocks only (db.own_farm_block_ids) - Boord's
+    block register can hold another grower's orchard, and HistoricalHarvest
+    has history for this farm alone, so mixing the two would compare this
+    season against a past that isn't its own.
+
+    `boord` supplies SystemSetting / Block / HarvestRecord (Boord's live
+    database, read-only); `owner` supplies HistoricalHarvest (this app's
+    own database)."""
+    settings = boord.exec(select(SystemSetting)).first()
     current_year = settings.current_harvest_year if settings else date.today().year
-    blocks = {b.id: b for b in session.exec(select(Block)).all()}
+    # Where a season starts. Boord owns this (SystemSetting.season_start_month
+    # /_day, v3.0 onward) and there is deliberately no fallback here: a second
+    # opinion about the anchor is how the two apps end up disagreeing about
+    # which season a date is in. A farm whose season runs Aug-Dec sets 1 August
+    # in Boord's Settings; Boord's own default of 1 January reproduces the old
+    # calendar-year behaviour exactly.
+    anchor_month = settings.season_start_month if settings else 1
+    anchor_day = settings.season_start_day if settings else 1
+    # Only this farm's own blocks. Boord is a pack house now, so its block
+    # register can hold another grower's orchard - and every comparison on
+    # this tab is "this season against THIS farm's history", which the
+    # history tables only have for this farm. See db.own_farm_block_ids.
+    own_blocks = own_farm_block_ids(boord)
+    blocks = {b.id: b for b in boord.exec(select(Block)).all() if b.id in own_blocks}
 
     # (season_year, block_id, harvest_date) -> kg, current season folded in
     # as just another year so every chart below treats it uniformly.
     day_kg: dict = defaultdict(float)
     estimated_blocks: set = set()  # blocks with at least one hectare-ratio-split historical row
-    for h in session.exec(select(HistoricalHarvest)).all():
+    for h in owner.exec(select(HistoricalHarvest)).all():
         day_kg[(h.season_year, h.block_id, h.harvest_date)] += h.kg
         if h.estimated:
             estimated_blocks.add(h.block_id)
-    for r in session.exec(select(HarvestRecord)).all():
+    for r in boord.exec(select(HarvestRecord)).all():
         local_ts = to_local(r.timestamp)
-        if local_ts is None or local_ts.year != current_year:
+        if local_ts is None:
             continue
-        # Every chart here is anchored to 1 August (see _season_day), so a
-        # record dated Jan-Jul of the harvest year has no place on this
-        # season's axis - it's the tail of the previous season or a mis-keyed
-        # date. Skipping it here keeps every panel consistent: including it
-        # would leave a negative season_day, which the cumulative loop below
-        # silently drops (it starts at day 1) while the monthly heatmap still
-        # counted it, so Season-to-Date and the monthly grand total disagreed
-        # on the same screen. Such records still appear in the date-range
-        # Dashboard and reports, so nothing is lost from the app.
-        if _season_day(local_ts.date(), current_year) < 1:
+        # Which season this record belongs to, by the anchor - NOT by its
+        # calendar year. The two differ for every anchor other than 1 January,
+        # and a season anchored in August genuinely runs into the next year.
+        #
+        # Keeping this one test as the single gate is what keeps every panel
+        # on the tab consistent. It used to be a calendar-year match followed
+        # by a separate "is this before 1 August?" guard, and a record that
+        # slipped between the two landed on a negative season_day: the
+        # cumulative loop below silently dropped it (it starts at day 1) while
+        # the monthly heatmap still counted it, so Season-to-Date and the
+        # monthly grand total disagreed on the same screen. Such records still
+        # appear in the date-range Dashboard and reports, so nothing is lost
+        # from the app.
+        if season_year_for(local_ts.date(), anchor_month, anchor_day) != current_year:
+            continue
+        if r.block_id not in own_blocks:
             continue
         day_kg[(current_year, r.block_id, local_ts.date())] += (r.weight_kg - r.deduction_kg)
 
@@ -84,14 +103,14 @@ def build_analysis_summary(session: Session) -> dict:
     # starts - it's just empty until then.
     all_years = sorted(set(years) | {current_year})
 
-    # --- Season pace: cumulative kg by day-of-season (days since 1 Aug) ---
-    # Every year's series starts at season_day 1 (1 Aug) even if picking
-    # hadn't actually started yet - the cumulative total genuinely is 0
-    # kg at that point, so it's not a fabricated point, and it means every
+    # --- Season pace: cumulative kg by day-of-season ---
+    # Every year's series starts at season_day 1 (the anchor date) even if
+    # picking hadn't actually started yet - the cumulative total genuinely is
+    # 0 kg at that point, so it's not a fabricated point, and it means every
     # line on the chart shares the same starting edge.
     year_day_totals: dict = defaultdict(lambda: defaultdict(float))
     for (year, block_id, d), kg in day_kg.items():
-        year_day_totals[year][_season_day(d, year)] += kg
+        year_day_totals[year][season_day(d, year, anchor_month, anchor_day)] += kg
 
     season_pace = []
     for year in all_years:
@@ -193,7 +212,7 @@ def build_analysis_summary(session: Session) -> dict:
     year_pick_days: dict = defaultdict(set)  # year -> set of season_days with kg > 0
     for (year, block_id, d), kg in day_kg.items():
         if kg > 0:
-            year_pick_days[year].add(_season_day(d, year))
+            year_pick_days[year].add(season_day(d, year, anchor_month, anchor_day))
 
     season_length = []
     for year in all_years:
@@ -232,6 +251,10 @@ def build_analysis_summary(session: Session) -> dict:
 
     return {
         "current_year": current_year,
+        # The charts draw a season_day axis and a month order, both of which
+        # only mean anything against the anchor they were computed from -
+        # so it travels with the data rather than being fetched separately.
+        "season_anchor": {"month": anchor_month, "day": anchor_day},
         "historical_years": historical_years,
         "season_to_date_kg": round(season_to_date_kg, 1),
         "pct_vs_average": pct_vs_average,

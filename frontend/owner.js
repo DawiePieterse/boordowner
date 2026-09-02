@@ -129,7 +129,21 @@ async function loadAnalysis() {
 
 async function loadWeather() {
   await LWWeatherTab.load(
-    () => Boord.api("/api/weather/history", { auth: true }),
+    // Like /api/risk/forecast, this does real work the default 8s network
+    // timeout was never sized for: it may first sync the newest hours from
+    // Open-Meteo (capped at 3s, and skipped entirely once the current hour
+    // is already stored), and then aggregates the WHOLE WeatherHistory
+    // record - close to 350,000 hourly rows, grouped into ~14,500 daily
+    // points, once a farm has backfilled to 1987. Empty, as it is before
+    // that backfill, it returned instantly; that is why this only started
+    // failing the day the history was imported.
+    //
+    // On an 8s budget that raced, and losing the race did not look like
+    // slowness: isNetworkError treats the abort as "server unreachable", so
+    // the tab set the GLOBAL offline flag and the amber banner appeared on
+    // every screen until some other tab loaded successfully. The server was
+    // fine and still working the whole time.
+    () => Boord.api("/api/weather/history", { auth: true, timeoutMs: 45000 }),
     { onAuthError: sessionExpired },
   );
 }

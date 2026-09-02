@@ -68,3 +68,51 @@ what was actually picked from each sub-block on that day - every figure
 built from an estimated split carries a small info icon next to its block
 name in the Per-Block Yield table so it's never mistaken for an exact
 historical record.
+
+---
+
+### When Boord's block ids change
+
+The source workbooks name their columns with the block ids that were
+current when they were prepared. Boord's register moves — blocks get split,
+merged, relettered — and a historical row keyed to an id that no longer
+exists is the **quiet** failure of this whole import. Nothing errors.
+Season totals still add up, because the Analysis tab sums by season as well
+as by block. The block simply shows no history, and a block with no history
+looks exactly like a block that was not bearing yet.
+
+It has happened once already. Three pairs lost their `a`/`b` lettering,
+with the **second** of each pair taking the bare number:
+
+| In the workbooks | In Boord today | |
+| --- | --- | --- |
+| `10a` Mauritius, 512 trees, 2.5 ha | `10b` Block 10b-Mau | |
+| `10b` Early Delight, 512 trees, 2.4 ha | `10` Block 10-ED | |
+| `17a` Mauritius, 584 trees, 2.8 ha | `17b` Block 17b-Mau | |
+| `17b` Early Delight, 584 trees, 2.8 ha | `17` Block 17-ED | |
+| `19a` Mauritius, 358 trees, 1.7 ha | `19b` Block 19b-Mau | |
+| `19b` Early Delight, 358 trees, 1.7 ha | `19` Block 19-ED | |
+
+Note this is the **opposite of what the ids suggest**: the bare `10` is the
+old `10b`, not the old `10a`. The mapping was established from variety,
+tree count and hectares, which agree on all six — hectares settle it, since
+new `10` is 2.4 ha and old `10a` was 2.5. Mapping by id instead would put
+each Mauritius block's six seasons onto an Early Delight block of a
+different size; season totals would still be right, and only kg/ha, kg/tree
+and the variety charts would be wrong, against a past nobody can check by
+eye.
+
+`8a`/`8b` were not affected.
+
+The map lives in `scripts/block_renames.py` and both import scripts apply
+it. **Add to it rather than editing the workbooks** — those are the farm's
+own records and should keep saying what they said when they were written.
+
+After any import, and after any Boord release that touches Master Data:
+
+```bat
+backend\.venv\Scripts\python.exe scripts\check_block_ids.py
+```
+
+It lists any imported id Boord no longer has, and exits non-zero — so a
+future rename is reported out loud instead of silently emptying a block.

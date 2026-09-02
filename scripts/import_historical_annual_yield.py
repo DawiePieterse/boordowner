@@ -53,6 +53,9 @@ from sqlmodel import Session, delete  # noqa: E402
 from db import init_owner_db as run_migrations, owner_engine as engine  # noqa: E402
 from models_owner import HistoricalAnnualYield  # noqa: E402
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from block_renames import rename as rename_block  # noqa: E402
+
 # The source workbook lives in data/imports/, which is gitignored, NOT in the
 # repository. It used to be committed - which meant every install carried one
 # particular farm's harvest records, and a new customer's server would clone
@@ -72,7 +75,13 @@ COLUMN_BLOCKS = {
     "C": "7", "E": "8a", "G": "9", "I": "10", "K": "11", "M": "12", "O": "13",
     "Q": "14", "S": "15", "U": "16", "W": "17", "Y": "18", "AA": "19",
 }
-SPLIT_RATIOS = {  # old combined block id -> {new sub-block id: share of hectares}
+# Old combined block id -> {sub-block id: share of hectares}. Both sides are
+# in the SOURCE SHEET's vocabulary, which is why the keys "10", "17" and "19"
+# here are combined pre-split blocks and NOT the blocks that carry those ids
+# in Boord today. The rename to today's ids happens after the split, on the
+# sub-block ids only - renaming a combined id would silently merge a whole
+# old block into one of its own halves.
+SPLIT_RATIOS = {
     "8a": {"8a": 0.583, "8b": 0.417},
     "10": {"10a": 0.510, "10b": 0.490},
     "17": {"17a": 0.500, "17b": 0.500},
@@ -106,12 +115,15 @@ def load_produksie_rows(wb):
                 continue
             kg = float(kg)
             if block_id in SPLIT_RATIOS:
+                # Split first, THEN rename - see the note on SPLIT_RATIOS.
                 for sub_block_id, share in SPLIT_RATIOS[block_id].items():
                     rows.append(HistoricalAnnualYield(
-                        block_id=sub_block_id, season_year=year, kg=round(kg * share, 1), estimated=True,
+                        block_id=rename_block(sub_block_id), season_year=year,
+                        kg=round(kg * share, 1), estimated=True,
                     ))
             else:
-                rows.append(HistoricalAnnualYield(block_id=block_id, season_year=year, kg=kg))
+                rows.append(HistoricalAnnualYield(
+                    block_id=rename_block(block_id), season_year=year, kg=kg))
     return rows
 
 

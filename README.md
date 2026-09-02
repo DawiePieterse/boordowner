@@ -54,7 +54,9 @@ frontend/
   service-worker.js  offline shell, cache prefix "boord-owner-"
   shared/            vendored from Boord: api.js (token key "boord_owner_token"),
                      styles.css, tailwind.js, ptr.js, fontawesome, charts + tab modules
-scripts/             the four historical-import scripts (need BOORD_DB_PATH set)
+scripts/             the four historical-import scripts (need BOORD_DB_PATH set),
+                     block_renames.py (workbook block ids -> Boord's register)
+                     and check_block_ids.py (catches the next rename)
 templates/           the two CSV templates for the historical imports
 install.ps1 / install.bat            Windows installer (beside Boord, port 8010)
 update_owner_server.bat              signed-tag update + restart

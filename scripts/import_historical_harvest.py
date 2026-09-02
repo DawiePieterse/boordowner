@@ -29,6 +29,9 @@ from sqlmodel import Session, delete  # noqa: E402
 from db import init_owner_db as run_migrations, owner_engine as engine  # noqa: E402
 from models_owner import HistoricalHarvest  # noqa: E402
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from block_renames import rename as rename_block  # noqa: E402
+
 # The source workbook lives in data/imports/, which is gitignored, NOT in the
 # repository. It used to be committed - which meant every install carried one
 # particular farm's harvest records, and a new customer's server would clone
@@ -40,6 +43,9 @@ DEFAULT_XLSX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "d
                           "Harvest Data 2020-2025 (Clean, Split by Block).xlsx")
 XLSX_PATH = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_XLSX
 YEAR_SHEETS = ["2020", "2021", "2022", "2023", "2024", "2025"]
+# Ids AS WRITTEN IN THE WORKBOOK whose figures came from splitting an old
+# combined block by hectare ratio. Tested before the rename below, because
+# that is the vocabulary this set is in.
 SPLIT_BLOCKS = {"8a", "8b", "10a", "10b", "17a", "17b", "19a", "19b"}
 
 
@@ -59,9 +65,15 @@ def load_rows():
                 if kg is None:
                     continue
                 block_id = str(block_id)
+                # `estimated` is about how the FIGURE was produced, so it is
+                # judged on the workbook's own id; the id itself is then
+                # brought up to date with Boord's register. See
+                # scripts/block_renames.py - the mapping is not what the ids
+                # suggest.
+                estimated = block_id in SPLIT_BLOCKS
                 rows.append(HistoricalHarvest(
-                    block_id=block_id, harvest_date=harvest_date.date(), season_year=int(year),
-                    kg=float(kg), estimated=block_id in SPLIT_BLOCKS,
+                    block_id=rename_block(block_id), harvest_date=harvest_date.date(),
+                    season_year=int(year), kg=float(kg), estimated=estimated,
                 ))
     return rows
 

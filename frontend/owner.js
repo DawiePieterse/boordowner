@@ -143,7 +143,9 @@ async function loadWeather() {
     // the tab set the GLOBAL offline flag and the amber banner appeared on
     // every screen until some other tab loaded successfully. The server was
     // fine and still working the whole time.
-    () => Boord.api("/api/weather/history", { auth: true, timeoutMs: 45000 }),
+    (years) => Boord.api(
+      `/api/weather/history${years && years.length ? `?years=${years.join(",")}` : ""}`,
+      { auth: true, timeoutMs: 45000 }),
     { onAuthError: sessionExpired },
   );
 }

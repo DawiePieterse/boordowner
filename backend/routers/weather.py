@@ -1,8 +1,8 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlmodel import Session, delete, select
 
 from db import get_boord_session, get_owner_session, weather_append_lock
@@ -60,7 +60,21 @@ def _metrics_public() -> list:
     return [{"key": m["key"], "label": m["label"], "unit": m["unit"], "decimals": m["decimals"]} for m in _METRICS]
 
 
-def build_weather_history(owner: Session, boord: Session) -> dict:
+def _years_on_file(owner: Session) -> list:
+    """Every calendar year WeatherHistory holds an hour for.
+
+    Its own query rather than a by-product of the points, because the points
+    are now only the years being charted while this list drives the filter
+    row - all forty of them have to be tickable whether or not they are
+    currently drawn.
+    """
+    rows = owner.exec(
+        select(func.strftime("%Y", WeatherHistory.timestamp)).distinct()).all()
+    return sorted(int(y) for y in rows if y)
+
+
+def build_weather_history(owner: Session, boord: Session,
+                          years: Optional[list] = None) -> dict:
     """Daily-aggregated WeatherHistory for the Weather tab - see _METRICS
     for per-metric aggregation. Grouped by plain calendar year (1 Jan -
     31 Dec), deliberately NOT the Aug-anchored harvest season used
@@ -71,25 +85,48 @@ def build_weather_history(owner: Session, boord: Session) -> dict:
     progress, only covers 1 Jan through whatever's been synced so far
     rather than a full year.
 
+    `years` is the calendar years to actually chart, defaulting to the most
+    recent one on file. The chart overlays a handful of years at a time and
+    never draws the whole record at once, so returning all of it meant
+    ~14,500 daily points and a 3.2 MB response on every tab open, of which
+    the tab used one year. The filter list still covers everything (see
+    _years_on_file) - the frontend fetches a year the first time it is
+    ticked and keeps it, so ticking one back off and on again costs nothing.
+
     The day-grouping is done in SQL, not by reading the table into Python.
     That matters more than it looks: WeatherHistory reaches back to 1987
     (see scripts/import_historical_weather_archive.py), so hydrating every
     hourly row here meant ~350k ORM objects and ~11s per tab open - past
-    the frontend's own 8s deadline (Boord.NETWORK_TIMEOUT_MS in
+    the frontend's own deadline (Boord.NETWORK_TIMEOUT_MS in
     shared/api.js), so the tab aborted the request and showed itself as
     offline while the server was still working. routers/risk.py bounds its
-    own WeatherHistory read for the same reason; this one can't bound by
-    date (the chart legitimately spans the whole record), so it aggregates
-    in the database instead. SQL's aggregates skip NULLs and return NULL
-    for an all-NULL day, which is exactly what the previous Python did -
-    soil_temp_6cm_c and uv_index are NULL for every pre-2020 row."""
+    own WeatherHistory read for the same reason. SQL's aggregates skip NULLs
+    and return NULL for an all-NULL day, which is exactly what the previous
+    Python did - soil_temp_6cm_c and uv_index are NULL for every pre-2020
+    row."""
+    all_years = _years_on_file(owner)
+    # Unknown years are dropped rather than rejected: the filter row is built
+    # from a list this same endpoint returned, so a year that has since gone
+    # is a stale tab, not a bad request.
+    wanted = [y for y in (years or all_years[-1:]) if y in set(all_years)]
+
     day = func.date(WeatherHistory.timestamp).label("day")
     aggregates = []
     for m in _METRICS:
         col = getattr(WeatherHistory, m["source"])
         agg = {"mean": func.avg, "sum": func.sum, "max": func.max}[m["agg"]]
         aggregates.append(agg(col))
-    rows = owner.exec(select(day, *aggregates).group_by(day).order_by(day)).all()
+
+    query = select(day, *aggregates)
+    if wanted:
+        # One indexed range per year, OR'd - not strftime(timestamp) IN (...),
+        # which is a function on the column and would scan the whole table to
+        # chart a single year. timestamp is indexed; these ranges use it.
+        query = query.where(or_(*[
+            and_(WeatherHistory.timestamp >= datetime(y, 1, 1),
+                 WeatherHistory.timestamp < datetime(y + 1, 1, 1))
+            for y in wanted]))
+    rows = owner.exec(query.group_by(day).order_by(day)).all()
 
     points = []
     for row in rows:
@@ -112,7 +149,8 @@ def build_weather_history(owner: Session, boord: Session) -> dict:
 
     return {
         "metrics": _metrics_public(),
-        "years": sorted({p["year"] for p in points}),
+        "years": all_years,
+        "years_returned": wanted,
         "current_year": date.today().year,
         "last_synced": last_synced.isoformat() if last_synced else None,
         "hours_elsewhere": hours_elsewhere,
@@ -121,14 +159,28 @@ def build_weather_history(owner: Session, boord: Session) -> dict:
 
 
 @router.get("/history")
-def weather_history(owner: Session = Depends(get_owner_session),
+def weather_history(years: Optional[str] = Query(
+                        None, description="Comma-separated calendar years to chart, "
+                                          "e.g. 2024,2025. Defaults to the most recent."),
+                    owner: Session = Depends(get_owner_session),
                     boord: Session = Depends(get_boord_session),
                     user=Depends(get_current_user)):
     """Weather tab data - syncs the latest hours from Open-Meteo first
-    (best-effort, see weather.sync_recent_weather) then returns the full
-    daily-aggregated history."""
+    (best-effort, see weather.sync_recent_weather) then returns the daily
+    aggregate for the requested years.
+
+    `years` is a comma-separated string rather than a repeated query
+    parameter so the frontend can build it by joining its selection, and so
+    a URL with a dozen years in it stays readable in a log. Anything
+    unparseable is ignored rather than rejected - see build_weather_history
+    on why a stale year is a stale tab, not a bad request."""
+    wanted = []
+    for part in (years or "").split(","):
+        part = part.strip()
+        if part.isdigit():
+            wanted.append(int(part))
     sync_recent_weather(owner, boord)
-    return build_weather_history(owner, boord)
+    return build_weather_history(owner, boord, years=wanted or None)
 
 
 @router.post("/history/backfill")

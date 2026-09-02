@@ -23,6 +23,15 @@ const LWWeatherTab = (() => {
   let _firstLoad = true;
   let _selectedYears = new Set();
   let _selectedMetrics = new Set();
+  // Daily points already fetched, keyed by year. The endpoint returns only
+  // the years asked for - the whole record is ~14,500 points and 3.2 MB,
+  // and the chart draws a handful of years at a time - so a year is fetched
+  // the first time it is ticked and kept here afterwards. Ticking one off
+  // and back on costs nothing, which is what makes this filter still feel
+  // like a filter rather than a page load.
+  let _pointsByYear = {};
+  let _fetchHistory = null;   // set by load(), reused when a new year is ticked
+  let _loading = false;
 
   function bind() {
     // Same double-bind guard as analysis-tab.js: the admin app re-runs its
@@ -35,7 +44,7 @@ const LWWeatherTab = (() => {
       if (e.target.classList.contains("weather-year-cb")) {
         const year = parseInt(e.target.value, 10);
         if (e.target.checked) _selectedYears.add(year); else _selectedYears.delete(year);
-        if (_data) _render();
+        if (_data) _ensureYearsThenRender();
       } else if (e.target.classList.contains("weather-metric-cb")) {
         if (e.target.checked) _selectedMetrics.add(e.target.value); else _selectedMetrics.delete(e.target.value);
         if (_data) _render();
@@ -65,12 +74,64 @@ const LWWeatherTab = (() => {
     });
   }
 
-  // fetchHistory: () => Promise<data> - each screen supplies its own call
-  // (admin: Boord.api with a bearer token; owner: Boord.api with the link's key).
+  // Fetches whichever selected years are not in _pointsByYear yet, then
+  // redraws. Called whenever the year selection changes; does no network at
+  // all when everything ticked is already held.
+  async function _ensureYearsThenRender() {
+    const missing = [..._selectedYears].filter((y) => !(y in _pointsByYear));
+    if (!missing.length) { _render(); return; }
+    if (_loading) return;             // one flight at a time; the change event will fire again
+    _loading = true;
+    _renderLoading(missing);
+    try {
+      const data = await _fetchHistory(missing);
+      _absorb(data);
+    } catch (e) {
+      if (Boord.isNetworkError(e)) { Boord.setOffline(true); }
+      else { console.error("Weather year load failed:", e); Boord.toast("Could not load that year"); }
+      // Untick what could not be fetched, so the filter row keeps telling
+      // the truth about what is on the chart.
+      missing.forEach((y) => _selectedYears.delete(y));
+      _syncYearCheckboxes();
+    } finally {
+      _loading = false;
+      _render();
+    }
+  }
+
+  // Merge one response's points into the per-year cache. A year the server
+  // returned no rows for is still recorded (as empty) so it is not re-fetched
+  // on every tick.
+  function _absorb(data) {
+    _data = data;
+    (data.years_returned || []).forEach((y) => { _pointsByYear[y] = []; });
+    (data.points || []).forEach((p) => {
+      (_pointsByYear[p.year] = _pointsByYear[p.year] || []).push(p);
+    });
+  }
+
+  function _syncYearCheckboxes() {
+    document.querySelectorAll(".weather-year-cb").forEach((cb) => {
+      cb.checked = _selectedYears.has(parseInt(cb.value, 10));
+    });
+  }
+
+  function _renderLoading(years) {
+    const chartEl = document.getElementById("weatherChart");
+    if (chartEl) {
+      chartEl.innerHTML = `<div class="text-sm text-slate-400 p-8 text-center">`
+        + `<i class="fa-solid fa-spinner fa-spin"></i> Loading ${years.join(", ")}...</div>`;
+    }
+  }
+
+  // fetchHistory: (years) => Promise<data>, where `years` is an array of
+  // calendar years to fetch (empty/omitted on the first call, which lets the
+  // server pick the most recent one it has).
   async function load(fetchHistory, { onAuthError } = {}) {
+    _fetchHistory = fetchHistory;
     let data;
     try {
-      data = await fetchHistory();
+      data = await fetchHistory([..._selectedYears]);
     } catch (e) {
       if (Boord.isNetworkError(e)) { Boord.setOffline(true); return; }
       if (Boord.isAuthError(e) && onAuthError) { onAuthError(e); return; }
@@ -79,7 +140,12 @@ const LWWeatherTab = (() => {
       return;
     }
     Boord.setOffline(false);
-    _data = data;
+    _absorb(data);
+    // The server chooses the year on a first load (the most recent it has),
+    // so adopt what it actually sent rather than assuming.
+    if (_firstLoad && data.years_returned && data.years_returned.length) {
+      _selectedYears = new Set(data.years_returned);
+    }
     _rebuildFilters(data);
     const synced = document.getElementById("weatherLastSynced");
     synced.textContent = data.last_synced
@@ -113,11 +179,15 @@ const LWWeatherTab = (() => {
 
   function _rebuildFilters(data) {
     if (_firstLoad) {
-      // The latest year actually on file, which is not always
-      // data.current_year - a new calendar year has no weather rows until
-      // the first sync of the year lands, and defaulting to an empty year
-      // would open the tab on a blank chart.
-      _selectedYears = new Set([data.years.length ? data.years[data.years.length - 1] : data.current_year]);
+      // The server picks the opening year (the latest actually on file,
+      // which is not always data.current_year - a new calendar year has no
+      // rows until its first sync lands, and defaulting to an empty year
+      // would open the tab on a blank chart). load() has already adopted
+      // whatever came back; this is only the fallback for a response that
+      // named none.
+      if (!_selectedYears.size) {
+        _selectedYears = new Set([data.years.length ? data.years[data.years.length - 1] : data.current_year]);
+      }
       _selectedMetrics = new Set(["temp_c"]);
     }
 
@@ -228,8 +298,8 @@ const LWWeatherTab = (() => {
     metricKeys.forEach((key) => {
       const m = metricsByKey[key];
       years.forEach((year, yi) => {
-        const points = _data.points
-          .filter((p) => p.year === year && p[key] != null)
+        const points = (_pointsByYear[year] || [])
+          .filter((p) => p[key] != null)
           .map((p) => ({ x: p.day_of_year, y: p[key] }));
         if (!points.length) return;
         const isCurrent = year === _data.current_year;

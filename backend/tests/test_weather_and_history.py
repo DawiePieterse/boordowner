@@ -244,3 +244,58 @@ def test_historical_imports_are_manager_only(client, make_user):
     for path in ("/api/historical-harvest/import", "/api/historical-annual-yield/import"):
         r = client.post(path, headers=viewer, files=_csv("season_year,kg\n2020,1\n"))
         assert r.status_code == 403
+
+
+# --------------------------------------------------------------------------- #
+# The Weather tab fetches a year at a time
+# --------------------------------------------------------------------------- #
+def _seed_years(*years):
+    """One noon hour on 1 July of each given year, at the farm_has_gps
+    fixture's coordinates so none of it counts as another location's."""
+    with Session(owner_engine) as s:
+        for y in years:
+            s.add(WeatherHistory(timestamp=datetime(y, 7, 1, 12), temp_c=20.0 + y % 10,
+                                 lat=-34.0, lon=18.5))
+        s.commit()
+
+
+def test_history_returns_only_the_latest_year_by_default(client, manager_headers, farm_has_gps,
+                                                          monkeypatch):
+    """The whole record is ~14,500 daily points and several MB; the chart
+    opens on one year. Returning everything made every tab open pay for
+    forty years of data to draw one."""
+    monkeypatch.setattr(weather_module, "fetch_historical_hourly",
+                        lambda *a, **k: {"hourly": {"time": [], }})
+    _seed_years(2019, 2024, 2025)
+    body = client.get("/api/weather/history", headers=manager_headers).json()
+
+    assert body["years_returned"] == [2025], "opens on the most recent year on file"
+    assert {p["year"] for p in body["points"]} == {2025}
+    # ...but every year stays tickable, or the filter row would shrink to
+    # whatever happened to be charted.
+    assert body["years"] == [2019, 2024, 2025]
+
+
+def test_history_returns_exactly_the_years_asked_for(client, manager_headers, farm_has_gps,
+                                                      monkeypatch):
+    monkeypatch.setattr(weather_module, "fetch_historical_hourly",
+                        lambda *a, **k: {"hourly": {"time": [], }})
+    _seed_years(2019, 2024, 2025)
+
+    body = client.get("/api/weather/history?years=2019,2025", headers=manager_headers).json()
+    assert body["years_returned"] == [2019, 2025]
+    assert {p["year"] for p in body["points"]} == {2019, 2025}
+    assert body["years"] == [2019, 2024, 2025], "the filter list is unaffected by the selection"
+
+
+def test_history_ignores_years_that_are_not_on_file(client, manager_headers, farm_has_gps,
+                                                     monkeypatch):
+    """A stale tab asking for a year since removed is a stale tab, not a bad
+    request - it must not 4xx the whole chart."""
+    monkeypatch.setattr(weather_module, "fetch_historical_hourly",
+                        lambda *a, **k: {"hourly": {"time": [], }})
+    _seed_years(2024, 2025)
+
+    r = client.get("/api/weather/history?years=1901,2025,notayear", headers=manager_headers)
+    assert r.status_code == 200
+    assert r.json()["years_returned"] == [2025]

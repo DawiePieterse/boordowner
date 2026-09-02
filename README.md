@@ -57,7 +57,8 @@ frontend/
 scripts/             the four historical-import scripts (need BOORD_DB_PATH set)
 templates/           the two CSV templates for the historical imports
 install.ps1 / install.bat            Windows installer (beside Boord, port 8010)
-update_owner_server.bat              pull + reinstall + restart
+update_owner_server.bat              signed-tag update + restart
+release-key.asc                      the public half of the release signing key
 ```
 
 ## Running it
@@ -84,8 +85,12 @@ needed, makes the venv, asks where Boord's `boord.db` is, writes
 `start_owner_server.bat`, opens firewall port 8010, and registers a
 `Boord Owner Server` scheduled task that runs as SYSTEM at boot (same account
 as Boord's task, so it can read `boord.db` and its `-wal`/`-shm` sidecars).
-It prints the generated `admin` password at the end. `update_owner_server.bat`
-pulls the latest code and restarts.
+It prints the generated `admin` password at the end, and finishes by telling
+you to write the release key's fingerprint into `data/release_key.fpr` —
+which is what makes updates possible at all (see below).
+
+`update_owner_server.bat` installs the newest **signed** release and
+restarts.
 
 ### Environment
 
@@ -95,6 +100,42 @@ pulls the latest code and restarts.
 | `OWNER_SECRET_KEY` | no | JWT signing key; generated once into `data/.owner_secret_key` if unset |
 | `OWNER_PORT` | no | default 8010 |
 | `OWNER_DATA_DIR` | no | default `<repo>/data` |
+
+## Updates
+
+`update_owner_server.bat` checks out the newest `v*` tag carrying a GPG
+signature from the release key, and refuses to update at all if that
+signature is missing, broken, or made by any other key. It does **not** pull
+a branch.
+
+The reason is the same one Boord's `update_server.bat` gives: the service
+runs as SYSTEM, so a branch pull would make a stolen GitHub token equivalent
+to code execution on every farm. Pushing code is not enough to ship it; you
+also have to hold the signing key.
+
+It is the **same key as Boord** — `67C64CFD D584 DD14 0E58 AF6E 329C 9B9D D056 2A9D`,
+whose public half is `release-key.asc` here. One publisher, one key, so a
+farm that already trusts it for Boord does not have to decide twice.
+
+What decides which releases a given server accepts is
+`data/release_key.fpr`, holding that fingerprint. It lives outside the
+checkout on purpose: a file inside the repo would be rewritten by the very
+update it is supposed to be vouching for. `install.ps1` deliberately does
+not write it — it prints the command and lets a person run it, because a
+fingerprint the installer wrote for you is the repo vouching for itself. If
+Boord is on the same PC it offers you Boord's, which a human already put
+there.
+
+Cutting a release:
+
+```bash
+git tag -s v1.1 -m "Boord Owner v1.1"     # needs the signing key
+git push origin v1.1
+```
+
+Keep `Boord.VERSION` in `frontend/shared/api.js` equal to the tag without
+its `v` — it is what the header shows, and it is how you tell at a glance
+whether a device's cached copy is actually the release you think it is.
 
 ## Authentication
 

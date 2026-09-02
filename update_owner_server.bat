@@ -1,16 +1,25 @@
 @echo off
 setlocal EnableDelayedExpansion
-:: Boord Owner - double-click to pull the latest code, install any new
-:: dependencies, bring the Owner database up to date, and restart the
-:: service so the update takes effect.
+:: Boord Owner - double-click this file to update to the newest signed
+:: release from GitHub, install any new dependencies, bring the Owner
+:: database up to date, and restart the service so the update takes effect.
 ::
-:: NOTE: this does a plain "git pull" of the current branch. Unlike the main
-:: Boord update path there is no GPG-signed-tag check here yet - if that
-:: matters for your install, update by hand from a tag you have verified.
+:: This deliberately does NOT "git pull" a branch. A branch pull trusts
+:: whoever can push to the repo, and the service this restarts runs as
+:: SYSTEM - so a stolen GitHub token would mean code execution on every farm
+:: running Boord Owner. Instead it checks out a tag carrying a GPG signature
+:: from the release key, and refuses to update at all if that signature is
+:: missing, broken, or made by any other key. Pushing code is then not enough
+:: to ship it; you also have to hold the signing key.
+::
+:: This is the same scheme, and the same key, as Boord's own
+:: update_server.bat - the two apps are one publisher, and a farm that has
+:: already trusted that key for Boord does not have to decide twice.
 
 net session >nul 2>&1
 if %errorLevel% neq 0 (
     echo This needs administrator rights to restart the server - requesting them now...
+    echo If Windows shows a User Account Control prompt, click "Yes".
     powershell -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
     exit /b
 )
@@ -19,28 +28,224 @@ cd /d "%~dp0"
 set "TASK=Boord Owner Server"
 set "VENV_PY=%~dp0backend\.venv\Scripts\python.exe"
 
+:: The fingerprint of the key allowed to sign releases for THIS server. It
+:: lives in data\ rather than in the checkout on purpose: a file inside the
+:: repo would be rewritten by the very update it is supposed to be vouching
+:: for, so an attacker who could push could also swap the fingerprint for
+:: their own. data\ is gitignored, so a checkout never touches it - it is set
+:: once by hand and only changes if you deliberately rotate the release key.
+set "FPR_FILE=%~dp0data\release_key.fpr"
+set "RELEASE_FPR="
+
 echo.
-echo ==^> Fetching the latest code...
-git pull --ff-only
-if %errorLevel% neq 0 (
+echo ==^> Checking this server can verify signed releases...
+if not exist "%FPR_FILE%" (
     echo.
-    echo git pull failed. The server has NOT been changed or restarted.
+    echo No release key fingerprint found at:
+    echo     %FPR_FILE%
+    echo.
+    echo This server cannot tell a genuine release from a tampered one, so it
+    echo will not update. Set it once, from this folder - note there is NO
+    echo space before the ^>, or echo writes one into the file and the
+    echo fingerprint will never match:
+    echo.
+    echo     echo ^<FINGERPRINT^>^> data\release_key.fpr
+    echo.
+    echo If this PC already runs Boord, it is the same key: copy the
+    echo fingerprint out of Boord's own data\release_key.fpr.
+    echo.
+    echo The server has NOT been restarted and is still running whatever it
+    echo was running before.
     pause
     exit /b 1
+)
+for /f "usebackq eol=# tokens=1 delims= " %%F in ("%FPR_FILE%") do (
+    if not defined RELEASE_FPR set "RELEASE_FPR=%%F"
+)
+if not defined RELEASE_FPR (
+    echo %FPR_FILE% is empty - expected a 40-character key fingerprint.
+    echo Not updating.
+    pause
+    exit /b 1
+)
+echo     Only releases signed by !RELEASE_FPR! will be accepted.
+
+:: Probe that git can actually run gpg before relying on it. A missing or
+:: broken GnuPG makes verify-tag fail exactly like a bad signature does, so
+:: without this check a farm with no gpg installed is told its release looks
+:: tampered with - which sends them looking for an attacker instead of an
+:: installer. Git for Windows' own bundled gpg fails this way too: it stores
+:: keys in a keyboxd daemon the Git distribution does not ship.
+set "GPG_PROG="
+for /f "delims=" %%G in ('git config --get gpg.program 2^>nul') do set "GPG_PROG=%%G"
+if not defined GPG_PROG set "GPG_PROG=gpg"
+"%GPG_PROG%" --version >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo GnuPG is not working on this server, so signed releases cannot be
+    echo checked. Nothing has been updated.
+    echo.
+    echo Tried: !GPG_PROG!
+    echo.
+    echo Install Gpg4win from https://gpg4win.org, then point git at it:
+    echo     git config --global gpg.program "C:/Program Files/GnuPG/bin/gpg.exe"
+    echo.
+    echo Boord's own install.bat does both of these for you, and this app
+    echo uses the same setting.
+    pause
+    exit /b 1
+)
+
+echo.
+echo ==^> Fetching signed releases from GitHub...
+:: --force so a retagged release is picked up rather than silently keeping
+:: the stale local tag. It still has to pass the signature check below.
+git fetch --tags --force origin
+if %errorLevel% neq 0 (
+    echo.
+    echo Fetch failed - check the error above ^(no internet, or this folder
+    echo isn't a git checkout^). The server has NOT been restarted, so it's
+    echo still running whatever it was before.
+    echo.
+    echo If it says "Permission denied ^(publickey^)", this is the SSH deploy
+    echo key: this window is elevated, and an elevated session run as a
+    echo DIFFERENT administrator account has a different %%USERPROFILE%%, with
+    echo no key in its .ssh folder.
+    pause
+    exit /b 1
+)
+
+:: Newest release tag by version order, not by date - a tag's date is
+:: attacker-controlled, its version number is what humans reason about.
+set "NEWTAG="
+for /f "delims=" %%T in ('git tag --list "v*" --sort^=-v:refname 2^>nul') do (
+    if not defined NEWTAG set "NEWTAG=%%T"
+)
+if not defined NEWTAG (
+    echo.
+    echo No release tags ^(v*^) found in this repository. Nothing to update to.
+    echo The server has NOT been restarted.
+    pause
+    exit /b 1
+)
+
+set "CURTAG=not on a release tag"
+for /f "delims=" %%C in ('git describe --tags --exact-match --match "v*" HEAD 2^>nul') do set "CURTAG=%%C"
+
+echo.
+echo     Currently running: !CURTAG!
+echo     Newest release:    !NEWTAG!
+
+if "!CURTAG!"=="!NEWTAG!" (
+    echo     Already on the newest signed release - skipping the code update.
+) else (
+    echo.
+    echo ==^> Verifying the signature on !NEWTAG!...
+    :: --raw prints GPG's machine-readable status lines. A VALIDSIG line means
+    :: the signature is good; requiring OUR fingerprint on that line is the
+    :: part that matters, because a plain "good signature" only proves the tag
+    :: was signed by *some* key present in this machine's keyring.
+    set "VERIFY_OUT=%TEMP%\boord_owner_verify.txt"
+    git verify-tag --raw "!NEWTAG!" > "!VERIFY_OUT!" 2>&1
+    findstr /C:"VALIDSIG" "!VERIFY_OUT!" > "!VERIFY_OUT!.sig"
+    findstr /I /C:"!RELEASE_FPR!" "!VERIFY_OUT!.sig" >nul
+    if errorlevel 1 (
+        findstr /C:"NO_PUBKEY" "!VERIFY_OUT!" >nul
+        if not errorlevel 1 (
+            echo.
+            echo The release key is not in this server's keyring, so !NEWTAG!
+            echo cannot be checked. This is NOT a sign of tampering - the key
+            echo simply has not been imported on this machine yet.
+            echo.
+            echo Import it and run this again:
+            echo     "!GPG_PROG!" --import release-key.asc
+        ) else (
+            echo.
+            echo *** SIGNATURE CHECK FAILED for !NEWTAG! ***
+            echo.
+            echo This release is not signed by the key this server trusts. That
+            echo means one of:
+            echo   - the release key was rotated and this server wasn't told
+            echo   - the release genuinely wasn't signed
+            echo   - someone tampered with the repository
+            echo.
+            echo Full gpg output: !VERIFY_OUT!
+            echo.
+            echo Do not work around this by checking the tag out by hand - find
+            echo out why it failed first.
+        )
+        echo.
+        echo Nothing has been changed. The server is still running !CURTAG!.
+        pause
+        exit /b 1
+    )
+    echo     Signature OK.
+
+    echo.
+    echo ==^> Updating to !NEWTAG!...
+    :: --force so a half-finished edit on the server can't block a deploy.
+    :: Anything under data\ is gitignored and is left alone; only tracked
+    :: code files are reset to exactly what the signed tag contains.
+    git checkout --force "!NEWTAG!"
+    if errorlevel 1 (
+        echo.
+        echo Checkout failed - check the error above. The server has NOT been
+        echo restarted, so it's still running whatever it was before.
+        pause
+        exit /b 1
+    )
 )
 
 echo.
 echo ==^> Installing any new dependencies...
 "%~dp0backend\.venv\Scripts\pip.exe" install --quiet --disable-pip-version-check -r "%~dp0backend\requirements.txt"
 
+:: Ask the venv directly rather than trusting pip's exit code. A release that
+:: adds a dependency cannot run without it, so a half-finished install would
+:: take the farm from "an update didn't apply" to "the server no longer
+:: starts", discovered by whoever opens the app next morning.
+"%VENV_PY%" -c "import fastapi, sqlmodel, jose, passlib, openpyxl" >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo The server's dependencies are not fully installed, so this update
+    echo cannot be applied. The database has not been touched and the server
+    echo has NOT been restarted - it is still running whatever it was before.
+    echo.
+    echo This is nearly always no internet, or pip being blocked. Try again
+    echo once the machine is online:
+    echo     update_owner_server.bat
+    pause
+    exit /b 1
+)
+
 echo.
 echo ==^> Bringing the Owner database up to date...
-:: A cheap pre-change snapshot, matching Boord's habit.
+:: A cheap pre-change snapshot, matching Boord's habit. Kept per-run rather
+:: than overwritten, because "the copy from before the update that broke it"
+:: is worthless if the next update overwrites it before anyone notices.
 if not exist "%~dp0data\backups" mkdir "%~dp0data\backups"
-if exist "%~dp0data\owner.db" copy /y "%~dp0data\owner.db" "%~dp0data\backups\owner-before-update.db" >nul
+set "STAMP="
+for /f "delims=" %%S in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss" 2^>nul') do set "STAMP=%%S"
+if not defined STAMP set "STAMP=unknown"
+if exist "%~dp0data\owner.db" copy /y "%~dp0data\owner.db" "%~dp0data\backups\owner-before-!STAMP!.db" >nul
 cd /d "%~dp0backend"
 "%VENV_PY%" -c "from db import init_owner_db; init_owner_db()"
+if errorlevel 1 (
+    echo.
+    echo *** THE OWNER DATABASE COULD NOT BE BROUGHT UP TO DATE ***
+    echo.
+    echo The server has not been restarted. Read the error above. A copy of
+    echo the database was taken first - look for the newest owner-before-*.db
+    echo in data\backups\.
+    cd /d "%~dp0"
+    pause
+    exit /b 1
+)
 cd /d "%~dp0"
+
+:: Leave a note of the tag now checked out, for whoever has to work out what
+:: a machine is running when git cannot answer.
+echo !NEWTAG!> "%~dp0data\installed_version.txt"
 
 echo.
 echo ==^> Restarting the server...
@@ -57,6 +262,13 @@ for /l %%i in (1,1,20) do (
         powershell -NoProfile -Command "try { if ((Invoke-WebRequest -Uri 'http://localhost:8010/' -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200) { exit 0 } } catch {}; exit 1" && set OK=1
     )
 )
-if defined OK ( echo     Server is back up on port 8010. ) else ( echo     Server did not answer in 20s - run start_owner_server.bat in a window to see why. )
+if defined OK (
+    echo     Server is back up on port 8010, running !NEWTAG!.
+) else (
+    echo     Server did not answer in 20s - run start_owner_server.bat in a
+    echo     window to see why. The most likely cause is that Boord's database
+    echo     schema has moved past what this release reads, which the app
+    echo     reports by name rather than failing later.
+)
 echo.
 pause

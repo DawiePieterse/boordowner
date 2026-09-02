@@ -21,6 +21,8 @@ $PythonVersion = "3.11.9"
 $PythonInstallerUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-amd64.exe"
 $LauncherPath = Join-Path $RepoRoot "start_owner_server.bat"
 $InitialPasswordFile = Join-Path $DataDir "initial_owner_password.txt"
+$ReleaseKeyPath = Join-Path $RepoRoot "release-key.asc"
+$FprFile = Join-Path $DataDir "release_key.fpr"
 # The default guess for Boord's database, if Boord is checked out beside this repo.
 $DefaultBoordDb = Join-Path (Split-Path $RepoRoot -Parent) "Boord\data\boord.db"
 
@@ -76,13 +78,79 @@ try {
         }
     }
 
-    # --- Step 2: Git (only needed by update_owner_server.bat) ---
+    # --- Step 2: Git and GnuPG (both only needed by update_owner_server.bat) ---
+    #
+    # Neither is required to RUN the server, so nothing here is fatal - a farm
+    # that cannot update is still a farm that works. They are checked at
+    # install time anyway because the alternative is finding out months later,
+    # in the middle of wanting an update.
     Write-Step "Checking for Git..."
     if (Get-Command git -ErrorAction SilentlyContinue) {
         Write-Ok "Found Git"
     } else {
         Write-Warn "Git is not installed. The server will still run, but update_owner_server.bat"
         Write-Warn "cannot fetch updates without it. Get it from https://git-scm.com/download/win"
+    }
+
+    # Updates are signed-tag only (see update_owner_server.bat), so the update
+    # path needs a working gpg. Git for Windows bundles one, but it keeps keys
+    # in a keyboxd daemon the Git distribution does not ship, so it fails
+    # exactly like a bad signature does - which sends people looking for an
+    # attacker instead of an installer. Reject it by path, same as Boord does.
+    Write-Step "Checking for GnuPG (used to verify signed releases)..."
+    $gpgExe = $null
+    $gpgCmd = Get-Command gpg -ErrorAction SilentlyContinue
+    if ($gpgCmd -and $gpgCmd.Source -notlike "*\Git\usr\bin\*") {
+        $gpgExe = $gpgCmd.Source
+        Write-Ok "Found GnuPG at $gpgExe"
+    } else {
+        foreach ($candidate in @((Join-Path $env:ProgramFiles "GnuPG\bin\gpg.exe"),
+                                 (Join-Path ${env:ProgramFiles(x86)} "GnuPG\bin\gpg.exe"))) {
+            if ((Test-Path $candidate) -and -not $gpgExe) { $gpgExe = $candidate }
+        }
+        if ($gpgExe) {
+            Write-Ok "Found GnuPG at $gpgExe"
+        } else {
+            Write-Warn "GnuPG not found. The server runs fine without it, but"
+            Write-Warn "update_owner_server.bat cannot verify a release and will refuse to"
+            Write-Warn "install one. Boord's own install.bat installs Gpg4win and points git"
+            Write-Warn "at it - if this PC runs Boord, run that once and this is handled."
+            Write-Warn "Otherwise: https://gpg4win.org"
+        }
+    }
+
+    # Importing the public key from the repo is safe: what actually decides
+    # which releases are trusted is the fingerprint in data\release_key.fpr,
+    # which lives outside the repo. A swapped key would not match it and
+    # update_owner_server.bat would refuse the release.
+    if ($gpgExe -and (Test-Path $ReleaseKeyPath)) {
+        try {
+            # Not -Wait, and time-limited. GnuPG starts keyboxd and gpg-agent on
+            # its first run, and on a machine whose keyring has just been created
+            # that start-up can hang indefinitely with its output redirected into
+            # a non-interactive process. Importing the key is a convenience; it
+            # must never be able to block the install.
+            $gpgLog = Join-Path $env:TEMP "boord-owner-gpg-import.log"
+            $proc = Start-Process -FilePath $gpgExe `
+                -ArgumentList @("--batch", "--yes", "--import", $ReleaseKeyPath) `
+                -NoNewWindow -PassThru `
+                -RedirectStandardError $gpgLog -RedirectStandardOutput "$gpgLog.out"
+            try { $null = $proc.Handle } catch { }
+            if ($proc.WaitForExit(60000)) {
+                $exit = $null
+                try { $exit = $proc.ExitCode } catch { }
+                if ($exit -eq 0) { Write-Ok "Imported the release key" }
+                else { Write-Warn "Importing release-key.asc did not report success - see $gpgLog" }
+            } else {
+                try { $proc.Kill() } catch { }
+                Write-Warn "gpg did not finish within 60 seconds - skipped the key import."
+                Write-Warn "Run this once in a Command Prompt, which lets it finish:"
+                Write-Warn "    ""$gpgExe"" --import release-key.asc"
+            }
+            Remove-Item "$gpgLog.out" -ErrorAction SilentlyContinue
+        } catch {
+            Write-Warn "Could not import release-key.asc: $($_.Exception.Message)"
+        }
     }
 
     # --- Step 3: Locate Boord's database ---
@@ -191,7 +259,56 @@ set "BOORD_DB_PATH=$boordDb"
     }
     Write-Host ""
     Write-Host " The server will now start automatically every time this PC turns on."
-    Write-Host " update_owner_server.bat pulls the latest code and restarts it."
+    Write-Host " update_owner_server.bat installs the newest SIGNED release and restarts it."
+
+    # --- Step 12: The trust root for updates ---
+    #
+    # Deliberately NOT written automatically. What this fingerprint decides is
+    # which code this machine will accept in future, and this installer came
+    # out of the very repository those updates come from - so a fingerprint it
+    # wrote for you would be the repo vouching for itself. Typing it is the one
+    # step that has to be a person's decision.
+    #
+    # Boord's own release_key.fpr is a different matter: it is outside both
+    # repos and a human already put it there, for the same publisher and the
+    # same key. Offering it saves the "where do I get the fingerprint" problem
+    # without making the choice for anybody.
+    if (-not (Test-Path $FprFile)) {
+        $boordFpr = $null
+        try {
+            $boordDataDir = Split-Path (Split-Path $boordDb -Parent) -Parent
+            $candidate = Join-Path $boordDataDir "data\release_key.fpr"
+            if (Test-Path $candidate) { $boordFpr = (Get-Content $candidate -TotalCount 1).Trim() }
+        } catch { }
+
+        Write-Host ""
+        Write-Host "================================================" -ForegroundColor Yellow
+        Write-Host " One step left: trust the release key" -ForegroundColor Yellow
+        Write-Host "================================================" -ForegroundColor Yellow
+        Write-Host " update_owner_server.bat will refuse to install anything until this"
+        Write-Host " server knows which signing key to trust. The server you just"
+        Write-Host " installed runs fine without this - only updates need it."
+        Write-Host ""
+        if ($boordFpr) {
+            Write-Host " Boord on this PC already trusts this key. Same publisher, same"
+            Write-Host " key - so in this folder, run:"
+            Write-Host ""
+            Write-Host "     echo $boordFpr> data\release_key.fpr" -ForegroundColor Cyan
+        } else {
+            Write-Host " In this folder, run:"
+            Write-Host ""
+            Write-Host "     echo <FINGERPRINT>> data\release_key.fpr" -ForegroundColor Cyan
+            Write-Host ""
+            Write-Host " ...with the 40-character fingerprint from whoever maintains this"
+            Write-Host " install."
+        }
+        Write-Host ""
+        Write-Warn "Note there is NO space before the > - echo would write one into the"
+        Write-Warn "file, and the fingerprint would then never match."
+    } else {
+        $fpr = (Get-Content $FprFile -TotalCount 1).Trim()
+        Write-Ok "Release key fingerprint on file: $fpr"
+    }
 } catch {
     Write-Host ""
     Write-Err "Something went wrong:"

@@ -7,16 +7,31 @@ device, showing the season's figures and nothing you could break.
 
 ## Opening your dashboard
 
-Boord Owner is its own app, running beside Boord on the farm server. Its
-address looks like:
+Boord Owner is its own app, running beside Boord on the farm server. Open
+it in any browser, on any phone, tablet, or computer:
 
 ```
-http://<the farm server>:8010/
+https://bekfontein-server.taile32cb0.ts.net/
 ```
 
-Open that in any browser, on any phone, tablet, or computer, and sign in
-with **your own username and password**. **Worth bookmarking it** (or
-adding it to your home screen) so it's one tap next time.
+This works from anywhere — home, the office, the orchard — provided
+**Tailscale** is connected on the device you're using (see below). Your
+browser will show a padlock, and the connection is encrypted the whole way.
+
+**On the farm's own Wi-Fi**, this address also works and needs no
+Tailscale at all:
+
+```
+http://192.168.68.114:8010/
+```
+
+Sign in with **your own username and password**. **Worth bookmarking**
+whichever one you use, or adding it to your home screen, so it's one tap
+next time.
+
+> Pick one and stick to it. The two addresses are separate as far as your
+> browser is concerned, so signing in on one does not sign you in on the
+> other — you would just be asked for your password twice for no reason.
 
 ### The first time you sign in
 
@@ -32,13 +47,18 @@ good for one sign-in, and you replace it immediately.
 
 ### If you're checking this from off the farm
 
-If you'll normally open this away from the farm itself (from home, an
-office, etc.), you'll also need **Tailscale** installed and connected on
-whatever device you use — ask the farm office to set this up for you
-once, it's a one-time thing. Your password proves who you are, but
-reaching the farm's server from outside its own network needs Tailscale
-regardless — the two aren't the same thing. If you're always on the
-farm's own Wi-Fi when you check, you can skip this.
+You'll need **Tailscale** installed and connected on whatever device you
+use — ask the farm office to set this up for you once; it's a one-time
+thing. Your password proves who *you* are, but reaching the farm's server
+from outside its own network needs Tailscale regardless. The two aren't
+the same thing, and neither replaces the other.
+
+If Tailscale isn't connected, the page simply won't load — it won't ask
+for a password and fail, it won't load at all. That's the usual cause of
+"the link is broken."
+
+If you're always on the farm's own Wi-Fi when you check, you can skip
+Tailscale and use the `192.168.68.114` address above.
 
 ### If you're signed out unexpectedly
 
@@ -48,6 +68,10 @@ deliberate: your password was changed (by you, on another device, or
 reset for you by a manager), or your account was disabled. Changing a
 password ends every other session it was signed into — which is exactly
 what you want if you ever think somebody else has it.
+
+The innocent explanation is that you've opened the *other* address. Your
+browser treats the Tailscale one and the farm Wi-Fi one as two different
+places and keeps a separate sign-in for each.
 
 ---
 

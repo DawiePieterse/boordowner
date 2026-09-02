@@ -94,6 +94,28 @@ which is what makes updates possible at all (see below).
 `update_owner_server.bat` installs the newest **signed** release and
 restarts.
 
+**HTTPS over Tailscale (optional).** The app is plain http on port 8010,
+which is fine on the farm's own LAN but makes every browser off-farm say
+"Not secure". One command on the server puts a real Let's Encrypt
+certificate in front of it:
+
+```bat
+"C:\Program Files\Tailscale\tailscale.exe" serve --bg --https=443 http://localhost:8010
+```
+
+Needs **HTTPS Certificates** enabled for the tailnet (admin console → DNS).
+The app then answers at `https://<machine>.<tailnet>.ts.net/`, still only
+inside the tailnet — Tailscale terminates TLS and proxies to 8010, and
+renews the certificate itself. `API_BASE` is relative, so nothing in the
+frontend needs to know.
+
+Use `serve`, never `funnel`: funnel would publish the login page on the
+open internet. Note that enabling certificates puts the machine's name into
+public Certificate Transparency logs, which is not reversible.
+
+Port 443 is one slot per machine. Boord on the same box can take
+`--https=8443` if it ever wants HTTPS too.
+
 ### Environment
 
 | Var | Required | Meaning |

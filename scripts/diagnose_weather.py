@@ -67,9 +67,14 @@ def main():
             n = owner.exec(select(func.count()).select_from(WeatherHistory)).one()
         print(f"       -> {n:,} hourly rows")
 
-        with Timer("newest row (indexed lookup)"):
+        # Mirrors sync_recent_weather's own query, LIMIT included. Without
+        # the limit this took 4.5-7.9s on a 347,760-row table and was the
+        # single biggest cost in the Weather tab; keep the two in step or
+        # this stops measuring what the endpoint actually does.
+        with Timer("newest row (indexed, LIMIT 1)"):
             latest = owner.exec(
-                select(WeatherHistory).order_by(WeatherHistory.timestamp.desc())).first()
+                select(WeatherHistory).order_by(
+                    WeatherHistory.timestamp.desc()).limit(1)).first()
         print(f"       -> {latest.timestamp if latest else 'none'}")
 
     # Each stage gets its own sessions, so one stage's connection state

@@ -150,7 +150,12 @@ async function loadWeather() {
 
 async function loadRisk() {
   await LWRiskTab.load(
-    () => Boord.api("/api/risk/summary", { auth: true }),
+    // Both risk calls need a real budget, not just the forecast. summary
+    // runs the whole analysis AND reads every weather hour from the first
+    // reference season onward - it was left on the 8s default purely
+    // because forecast was the slower of the two when they were written,
+    // which stopped being true once a farm backfilled forty years.
+    () => Boord.api("/api/risk/summary", { auth: true, timeoutMs: 45000 }),
     // This call does real work the default 8s network timeout isn't built for.
     () => Boord.api("/api/risk/forecast", { auth: true, timeoutMs: 45000 }),
     { onAuthError: sessionExpired },

@@ -258,7 +258,18 @@ def _compute_driver_state(boord: Session, owner: Session) -> dict:
     # back to 1987 (see scripts/import_historical_weather_archive.py) while
     # this function only ever looks up the reference range plus the current
     # season - without it, that's a 25-year pointless table scan.
-    rows = owner.exec(select(WeatherHistory).where(
+    #
+    # Selected column by column rather than as whole WeatherHistory objects.
+    # The drivers read four fields and the timestamp; the table has fourteen
+    # columns, and this range is ~123,000 rows on a farm that has backfilled
+    # to 1987. Building that many ORM instances to look at five attributes is
+    # most of the cost of this function. The column list is derived from
+    # DRIVERS rather than written out, so a new driver cannot quietly select
+    # a field this query does not fetch - the rows SQLAlchemy returns still
+    # support attribute access, so _driver_value's getattr() is unchanged.
+    driver_cols = [getattr(WeatherHistory, f) for f in
+                   dict.fromkeys(d["field"] for d in DRIVERS)]
+    rows = owner.exec(select(WeatherHistory.timestamp, *driver_cols).where(
         WeatherHistory.timestamp >= date(min(all_years), 1, 1))).all()
     by_date = defaultdict(list)
     for r in rows:

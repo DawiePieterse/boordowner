@@ -148,7 +148,8 @@ Beyond Boord:
   database.
 - **A manager role.** `is_manager` users get `/api/owner-users` and the
   Users tab: add a colleague (returns a one-time password shown once),
-  reset a forgotten password, disable someone who has left, promote/demote.
+  reset a forgotten password, disable someone who has left, delete an
+  account added by mistake, promote/demote.
   At least one enabled manager must always exist — the CRUD refuses any
   change that would break that.
 - **Fast revocation.** `get_current_user` loads the user row on every

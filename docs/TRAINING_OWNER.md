@@ -323,12 +323,18 @@ list itself.
   everywhere, straight away.
 - **Disable** — for somebody who has left. Their account stops working
   on their very next tap, not whenever their session would have run out.
-  It's kept rather than deleted, so the list still records who once had
-  access; re-enable it if they come back.
-- **Manager / not manager** — promote or demote somebody.
+  It's kept, so the list still records who once had access, and **Enable**
+  brings them back if they return.
+- **Delete** — removes the account outright, with no record that it
+  existed. Use this for a mistake — a typo'd username, somebody added who
+  shouldn't have been. For a person who genuinely had access and has since
+  left, **Disable is the better choice**: it stops them just as
+  immediately, and leaves you able to answer "who could see this?" later.
+- **Make manager / Make viewer** — promote or demote somebody.
 
 **There must always be at least one enabled manager.** The app refuses
-any change that would leave none — disabling the last one, or demoting
-them — because there would then be nobody able to restore access to
-anybody, including themselves. If you're the only manager, add a second
-one before you change your own account.
+any change that would leave none — disabling the last one, demoting them,
+or deleting them — because there would then be nobody able to restore
+access to anybody, including themselves. If you're the only manager, add a
+second one before you change your own account. You also cannot delete the
+account you are signed in as.

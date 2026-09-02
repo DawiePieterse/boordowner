@@ -1,37 +1,53 @@
-# Owner View — Guide
+# Boord Owner — Guide
 
-A read-only way to check on harvest progress — no username/password,
-nothing to remember.
+A read-only way to check on harvest progress: your own sign-in, on any
+device, showing the season's figures and nothing you could break.
 
 ---
 
 ## Opening your dashboard
 
-You'll have been sent a link that looks like:
+Boord Owner is its own app, running beside Boord on the farm server. Its
+address looks like:
 
 ```
-https://.../owner/?key=...
+http://<the farm server>:8010/
 ```
 
-Open it in any browser, on any phone, tablet, or computer. That's the
-whole login process — the long code at the end of the link *is* your
-access, so there's no separate username/password to enter.
+Open that in any browser, on any phone, tablet, or computer, and sign in
+with **your own username and password**. **Worth bookmarking it** (or
+adding it to your home screen) so it's one tap next time.
 
-**Worth bookmarking it** (or adding it to your home screen) so you don't
-need to dig up the link again next time.
+### The first time you sign in
+
+Whoever set up your account gives you a **one-time password**. It works
+exactly once, for signing in — the app then asks you to choose a password
+of your own before it will show you anything. Pick something only you
+know; nobody else needs it, and a manager can always issue you a fresh
+one-time password if you forget it.
+
+If you were the person who installed the app, the server printed a
+password for the `admin` account when it first started. Same rule: it is
+good for one sign-in, and you replace it immediately.
 
 ### If you're checking this from off the farm
 
 If you'll normally open this away from the farm itself (from home, an
 office, etc.), you'll also need **Tailscale** installed and connected on
 whatever device you use — ask the farm office to set this up for you
-once, it's a one-time thing. The link's code proves you're allowed to
-see the dashboard, but reaching the farm's server from outside its own
-network needs Tailscale regardless — the two aren't the same thing. If
-you're always on the farm's own Wi-Fi when you check, you can skip this.
+once, it's a one-time thing. Your password proves who you are, but
+reaching the farm's server from outside its own network needs Tailscale
+regardless — the two aren't the same thing. If you're always on the
+farm's own Wi-Fi when you check, you can skip this.
 
-If the link ever stops working, ask the farm office for a new one — see
-"If something looks wrong" below.
+### If you're signed out unexpectedly
+
+Sessions last 30 days, so you shouldn't have to sign in often. Being
+asked again sooner than that means one of a few things, all of them
+deliberate: your password was changed (by you, on another device, or
+reset for you by a manager), or your account was disabled. Changing a
+password ends every other session it was signed into — which is exactly
+what you want if you ever think somebody else has it.
 
 ---
 
@@ -48,9 +64,15 @@ Below that, four tabs:
 | **Risk** | How risky this season's weather looks, and what it implies for the harvest |
 
 The Dashboard is the day-to-day view; the other three are the
-season-level ones. **Analysis, Weather and Risk are on this link only** —
-the farm office's own Admin app doesn't have them, so this is the place
+season-level ones. **Analysis, Weather and Risk live in this app only** —
+the farm office's own Boord app doesn't have them, so this is the place
 they're looked at.
+
+If you're a manager you'll see a fifth tab, **Users** — see
+"Managing who can sign in" at the end of this guide.
+
+Everything here is read-only. Nothing you tap in this app changes a
+figure in Boord; the numbers are Boord's, shown as they stand.
 
 ---
 
@@ -236,20 +258,26 @@ the limits. The two worth knowing:
 
 ## What this doesn't show
 
-This link is deliberately limited to progress information — it doesn't
+This app is deliberately limited to progress information — it doesn't
 show individual worker pay, contact details, or anything you could
-change. There's no way to edit data from this view; it's read-only by
-design. If you need more detail than this covers, ask the farm office
+change. There's no way to edit data from here; it's read-only by design,
+and it opens Boord's own records in a mode that physically refuses
+writes. If you need more detail than this covers, ask the farm office
 directly.
 
 ---
 
 ## If something looks wrong
 
-- **The link shows "This link isn't valid"** — this is about the link
-  itself, not your connection. It may have been regenerated (this happens
-  if it needed to be revoked and reissued) or mistyped/cut off when it
-  was shared with you. Ask the farm office for the current link.
+- **You're sent back to the sign-in screen** — this is about your
+  account, not your connection. Either your password was changed
+  somewhere (which ends every other session, deliberately), or your
+  account was disabled. Ask a manager to reset you a fresh one-time
+  password.
+- **"Incorrect username or password"** — check for a stray space if you
+  pasted a one-time password. A one-time password also only works
+  *once*: if you already signed in with it and chose your own, that new
+  one is the one to use.
 - **An amber bar says you're offline** — this one *is* the connection.
   The page shows the last figures it saved for whatever date range/farm
   is selected, labeled with how old they are (e.g. *"Offline - showing
@@ -273,3 +301,34 @@ directly.
   checking this from off the farm" above) - this is the most common
   cause. If Tailscale is connected and it still won't load, check your
   own internet connection, then let the farm office know if it persists.
+
+---
+
+## Managing who can sign in
+
+Only **managers** see the **Users** tab. If yours doesn't have one, this
+section isn't for you — ask whoever set the app up.
+
+Everyone in this list can sign in and see the same figures; being a
+manager adds nothing to what you *see*, only the right to manage the
+list itself.
+
+- **Add user** — type a username and press Add. The app shows a
+  **one-time password**, once. Copy it there and then and pass it to the
+  person; it can't be shown again. They sign in with it and immediately
+  choose their own. Tick **Manager** if they should be able to manage
+  this list too.
+- **Reset password** — for somebody who's forgotten theirs. Same
+  one-time password, shown once. Resetting also signs that account out
+  everywhere, straight away.
+- **Disable** — for somebody who has left. Their account stops working
+  on their very next tap, not whenever their session would have run out.
+  It's kept rather than deleted, so the list still records who once had
+  access; re-enable it if they come back.
+- **Manager / not manager** — promote or demote somebody.
+
+**There must always be at least one enabled manager.** The app refuses
+any change that would leave none — disabling the last one, or demoting
+them — because there would then be nobody able to restore access to
+anybody, including themselves. If you're the only manager, add a second
+one before you change your own account.

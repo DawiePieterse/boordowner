@@ -3,9 +3,10 @@
 This guide covers the three tabs that answer the question *"how is this
 season shaping up, and why?"* — **Weather**, **Analysis** (the harvest
 numbers), and **Risk** (the season risk score and harvest forecast). All
-three live on the read-only Owner View — the link ending `/owner/?key=...`
-that Admin issues under **Settings → Owner View**. They are not part of
-the Admin app itself, which keeps the day-to-day operational tabs.
+three live in **Boord Owner**, the read-only app that runs beside Boord on
+the farm server (usually port 8010), which you sign in to with your own
+username and password. They are not part of Boord itself, which keeps the
+day-to-day operational screens.
 
 > There is no tab literally called "Harvesting" — the harvest data lives
 > under **Analysis**, and the harvest *prediction* lives under **Risk**.

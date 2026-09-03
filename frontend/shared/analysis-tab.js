@@ -1,20 +1,21 @@
 // Analysis tab (historical 2020-2025 vs current season): season pace,
 // per-block/variety yield, season length, monthly volume, PDF export.
-// Renders the Analysis tab from /api/analysis/summary. Once shared with
-// Boord's admin app and the old token-authenticated Owner View, both of
-// which are gone - see weather-tab.js. Identical markup
-// (same element IDs) and identical figures, so this one module renders
-// both rather than the two screens carrying their own copies to drift.
+// Renders it from /api/analysis/summary. Once shared with Boord's admin app
+// and the old token-authenticated Owner View, both of which are gone - see
+// weather-tab.js. The module keeps its screen-agnostic shape (the caller
+// supplies the fetch) because that is still the cleaner seam, not because
+// anything else renders it.
 const LWAnalysisTab = (() => {
   let _data = null;
   let _bound = false;
 
   function bind() {
-    // The admin app calls its bind* helpers from showApp(), which re-runs on
-    // every sign-in without reloading the page (logout() just swaps the
-    // visible div). Without this guard a sign-out/sign-in cycle would stack a
-    // second delegated listener on #tab-analysis, and one click on a chart's
-    // PDF button would rasterize and download the same file twice.
+    // bind() is public and the page never reloads - logout() just swaps the
+    // visible div - so a second call is always one caller away. owner.js
+    // happens to guard its own bind* run (_appBound), but without this a
+    // caller that did bind twice would stack a second delegated listener on
+    // #tab-analysis, and one click on a chart's PDF button would rasterize
+    // and download the same file twice.
     if (_bound) return;
     _bound = true;
 
@@ -51,14 +52,14 @@ const LWAnalysisTab = (() => {
     });
   }
 
-  // fetchSummary: () => Promise<data> - each screen supplies its own call
-  // (admin: Boord.api with a bearer token; owner: Boord.api with the link's key).
-  // onAuthError: called ONLY on a genuine 401/403 - admin signs out, owner
-  // shows the "link isn't valid" screen. Anything else (a 500, a malformed
-  // response) must fall through to the toast: signing an admin out or
-  // telling an owner their link is dead because the server hit a bug would
-  // be both wrong and, for the owner, a direct contradiction of the manual's
-  // promise that that message never means a server problem.
+  // fetchSummary: () => Promise<data> - the caller supplies the call
+  // (owner.js: Boord.api with the session bearer token).
+  // onAuthError: called ONLY on a genuine 401/403, which ends the session and
+  // returns to the sign-in screen. Anything else (a 500, a malformed
+  // response) must fall through to the toast: signing somebody out because
+  // the server hit a bug would be both wrong and a direct contradiction of
+  // the manual's promise that being signed out never means a server
+  // problem.
   async function load(fetchSummary, { onAuthError } = {}) {
     let data;
     try {

@@ -11,17 +11,17 @@
 // blending real short-range weather forecast with historical-scenario
 // ranges for whatever part of the season hasn't happened yet.
 // Renders the Risk tab from /api/risk/summary + /api/risk/forecast. Once
-// shared with Boord's admin app and the old token-authenticated Owner
-// View, both of which are gone - see weather-tab.js, same split as analysis-tab.js and weather-tab.js.
+// shared with Boord's admin app and the old token-authenticated Owner View,
+// both of which are gone - see weather-tab.js, same as analysis-tab.js.
 const LWRiskTab = (() => {
   let _data = null;
   let _bound = false;
   let _selectedYear = null;
 
   function bind() {
-    // Same double-bind guard as analysis-tab.js/weather-tab.js: the admin
-    // app re-runs its bind* helpers on every sign-in without reloading the
-    // page, so without this a sign-out/sign-in cycle would stack listeners.
+    // Same double-bind guard as analysis-tab.js/weather-tab.js: bind() is
+    // public and the page never reloads, so a second call would stack a
+    // second set of listeners on the same elements.
     if (_bound) return;
     _bound = true;
 
@@ -51,9 +51,9 @@ const LWRiskTab = (() => {
     });
   }
 
-  // fetchSummary/fetchForecast: () => Promise<data> - each screen supplies
-  // its own calls (admin: Boord.api with a bearer token; owner: Boord.api with
-  // the link's key). The forecast call is kicked off alongside the summary
+  // fetchSummary/fetchForecast: () => Promise<data> - the caller supplies
+  // the calls (owner.js: Boord.api with the session bearer token). The
+  // forecast call is kicked off alongside the summary
   // one but handled independently: a forecast/Open-Meteo hiccup shows a
   // "currently unavailable" note in just that card rather than failing the
   // whole tab - the score header, back-test charts and methodology all

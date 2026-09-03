@@ -31,6 +31,36 @@ function sessionExpired() {
   showLogin();
 }
 
+// The same 401, but on the one call that follows a SUCCESSFUL sign-in: the
+// server has just refused a token it issued itself, seconds ago. Saying
+// "session ended" there is a lie with consequences - the password was right,
+// there was no session to end, and it sends somebody off retyping a password
+// that was never the problem. Both causes are server-side and invisible from
+// this screen (a token_valid_from cutoff in the future, usually from a clock
+// that has since been corrected, or a signing key that changed under a
+// restart), so say that plainly and name the tool that tells them apart.
+function signInRejected(e) {
+  Boord.clearToken();
+  _me = null;
+  showLogin();
+  // The two causes answer with different details and need different fixes,
+  // so translate rather than quoting the server's own wording back - the
+  // revoked-session message is written for a case this is not, and repeating
+  // it here would undo the correction this function exists to make.
+  const revoked = /session ended/i.test(Boord.errorDetail(e, ""));
+  const cause = revoked
+    ? "the account's session cut-off is set in the future, which a server clock "
+      + "that has since been corrected will do"
+    : "the server could not verify a token it had just signed, so its signing "
+      + "key changed underneath it";
+  const err = document.getElementById("loginError");
+  err.textContent = `Your password was accepted, but the server then rejected the `
+    + `session it had just issued - ${cause}. That is a fault on the farm server, `
+    + `not your password. Running scripts/diagnose_auth.py there confirms which, `
+    + `and can repair it.`;
+  err.classList.remove("hidden");
+}
+
 function updateBannerFarmName() {
   const el = document.getElementById("headerFarmName");
   if (el) el.textContent = (_systemSettings && _systemSettings.packhouse_name) || "Boord";
@@ -533,7 +563,7 @@ function bindAuthForms() {
       );
       document.getElementById("loginPassword").value = "";
       if (data.must_change_password) { showPasswordSetup(); return; }
-      await route();
+      await route({ afterSignIn: true });
     } catch (ex) {
       err.textContent = Boord.isNetworkError(ex)
         ? "Can't reach the server. Check the connection and try again."
@@ -558,7 +588,9 @@ function bindAuthForms() {
       Boord.setToken(r.access_token);
       document.getElementById("newPassword").value = "";
       document.getElementById("newPasswordConfirm").value = "";
-      await route();
+      // Also a token issued seconds ago - by change-password itself - so the
+      // same distinction applies as after a sign-in.
+      await route({ afterSignIn: true });
     } catch (ex) {
       // The password rules answer 400; a 401 here means the token that got
       // us to this screen has since been revoked.
@@ -592,12 +624,15 @@ function bindAuthForms() {
 
 // Decides which screen to show based on the stored token. Called on load,
 // after sign-in, and after the first-login password change.
-async function route() {
+async function route({ afterSignIn = false } = {}) {
   if (!Boord.getToken()) { showLogin(); return; }
   try {
     _me = await Boord.api("/api/owner-auth/me", { auth: true });
   } catch (e) {
-    if (Boord.isAuthError(e)) { sessionExpired(); return; }
+    // A 401 here means two entirely different things depending on where the
+    // token came from: an old one out of localStorage really has expired,
+    // while one minted by the sign-in a moment ago cannot have.
+    if (Boord.isAuthError(e)) { (afterSignIn ? signInRejected : sessionExpired)(e); return; }
     // Network error: we have a token but can't check it. Go into the app
     // anyway so the offline dashboard cache is usable; the first real call
     // that gets a 401 will bounce back to sign-in.

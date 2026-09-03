@@ -7,7 +7,7 @@ const API_BASE = "";
 const Boord = {
   // Bump on every deploy that touches frontend code. Shown in the header so
   // it's obvious whether a device's cached copy is up to date.
-  VERSION: "1.3.1",
+  VERSION: "1.3.2",
 
   // The Owner-app session JWT. Deliberately a different localStorage key from
   // Boord's "boord_admin_token" so the two apps on the same origin can't

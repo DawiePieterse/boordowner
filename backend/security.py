@@ -79,6 +79,33 @@ def create_access_token(user: OwnerUser) -> str:
     )
 
 
+# Usernames already warned about, so a locked-out device retrying cannot fill
+# the log with the same line.
+_CUTOFF_WARNED = set()
+
+
+def _warn_if_cutoff_is_in_the_future(username: str, cutoff: float) -> None:
+    """Say so on the console when a rejection is really a clock fault.
+
+    A cutoff later than now cannot revoke anything - every token this server
+    is able to issue is stamped earlier than it, so the account is locked out
+    of its own sign-in and each attempt looks, from the app, exactly like an
+    expired session. Only a clock that moved backwards after a password
+    change puts a cutoff there, and it does not heal when the clock is put
+    right. Without a word here the server looks healthy while refusing
+    everybody: it answers 200 to the sign-in and 401 to the call after it.
+    """
+    if cutoff <= datetime.now(timezone.utc).timestamp() or username in _CUTOFF_WARNED:
+        return
+    _CUTOFF_WARNED.add(username)
+    when = datetime.fromtimestamp(cutoff, timezone.utc)
+    print(f"[security] {username}: token_valid_from is in the FUTURE "
+          f"({when:%Y-%m-%d %H:%M:%S} UTC) - every token issued now is rejected "
+          f"on arrival and this account cannot sign in. Check this server's "
+          f"clock, then run scripts/diagnose_auth.py --fix-future-cutoffs.",
+          flush=True)
+
+
 def _user_for_credentials(credentials: Optional[HTTPAuthorizationCredentials]):
     """(user, error) for a bearer token. error is one of None / "missing" /
     "bad" / "revoked". Loads the OwnerUser row every call, like Boord's
@@ -101,7 +128,9 @@ def _user_for_credentials(credentials: Optional[HTTPAuthorizationCredentials]):
     # a column added to a table that already has rows lands as NULL, and
     # comparing a float to None raises rather than answering. Treat an
     # unknown cutoff as "never revoked" - the row predates the mechanism.
-    if float(payload.get("iat", 0)) < (user.token_valid_from or 0):
+    cutoff = user.token_valid_from or 0
+    if float(payload.get("iat", 0)) < cutoff:
+        _warn_if_cutoff_is_in_the_future(user.username, cutoff)
         return None, "revoked"
     return user, None
 

@@ -109,6 +109,12 @@ def build_weather_history(owner: Session, boord: Session,
     # from a list this same endpoint returned, so a year that has since gone
     # is a stale tab, not a bad request.
     wanted = [y for y in (years or all_years[-1:]) if y in set(all_years)]
+    # ...but dropping every year asked for must not fall through to "no year
+    # filter at all", which is the whole record: a stale tab asking only for a
+    # year since removed would be answered with forty years and 3.2 MB, the
+    # very thing the parameter exists to stop. It gets the same default a
+    # fresh tab does.
+    wanted = wanted or all_years[-1:]
 
     day = func.date(WeatherHistory.timestamp).label("day")
     aggregates = []
@@ -118,6 +124,8 @@ def build_weather_history(owner: Session, boord: Session,
         aggregates.append(agg(col))
 
     query = select(day, *aggregates)
+    # Empty only when WeatherHistory itself is - the fallback above means a
+    # request always resolves to a year while there is one on file.
     if wanted:
         # One indexed range per year, OR'd - not strftime(timestamp) IN (...),
         # which is a function on the column and would scan the whole table to

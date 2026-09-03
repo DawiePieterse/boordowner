@@ -34,9 +34,9 @@ const LWWeatherTab = (() => {
   let _loading = false;
 
   function bind() {
-    // Same double-bind guard as analysis-tab.js: the admin app re-runs its
-    // bind* helpers on every sign-in without reloading the page, so without
-    // this a sign-out/sign-in cycle would stack duplicate listeners.
+    // Same double-bind guard as analysis-tab.js: bind() is public and the
+    // page never reloads, so a second call would stack duplicate listeners -
+    // and here that would also mean a duplicate fetch per year ticked.
     if (_bound) return;
     _bound = true;
 
@@ -78,21 +78,33 @@ const LWWeatherTab = (() => {
   // redraws. Called whenever the year selection changes; does no network at
   // all when everything ticked is already held.
   async function _ensureYearsThenRender() {
-    const missing = [..._selectedYears].filter((y) => !(y in _pointsByYear));
-    if (!missing.length) { _render(); return; }
-    if (_loading) return;             // one flight at a time; the change event will fire again
+    if (_loading) return;   // the flight already running picks up this tick too
     _loading = true;
-    _renderLoading(missing);
     try {
-      const data = await _fetchHistory(missing);
-      _absorb(data);
-    } catch (e) {
-      if (Boord.isNetworkError(e)) { Boord.setOffline(true); }
-      else { console.error("Weather year load failed:", e); Boord.toast("Could not load that year"); }
-      // Untick what could not be fetched, so the filter row keeps telling
-      // the truth about what is on the chart.
-      missing.forEach((y) => _selectedYears.delete(y));
-      _syncYearCheckboxes();
+      // Re-checked after every flight, not once: a year ticked while a fetch
+      // was in the air took the early return above, and nothing else is
+      // coming to fetch it - the change event has already been and gone. It
+      // would have stayed ticked, undrawn and unrequested until the next tick.
+      let missing = [..._selectedYears].filter((y) => !(y in _pointsByYear));
+      while (missing.length) {
+        _renderLoading(missing);
+        try {
+          const data = await _fetchHistory(missing);
+          _absorb(data);
+          // A year the server did not send back - one no longer on file -
+          // is recorded as empty here, or this loop would ask for it again
+          // on every pass and never end.
+          missing.forEach((y) => { if (!(y in _pointsByYear)) _pointsByYear[y] = []; });
+        } catch (e) {
+          if (Boord.isNetworkError(e)) { Boord.setOffline(true); }
+          else { console.error("Weather year load failed:", e); Boord.toast("Could not load that year"); }
+          // Untick what could not be fetched, so the filter row keeps telling
+          // the truth about what is on the chart.
+          missing.forEach((y) => _selectedYears.delete(y));
+          _syncYearCheckboxes();
+        }
+        missing = [..._selectedYears].filter((y) => !(y in _pointsByYear));
+      }
     } finally {
       _loading = false;
       _render();

@@ -299,3 +299,18 @@ def test_history_ignores_years_that_are_not_on_file(client, manager_headers, far
     r = client.get("/api/weather/history?years=1901,2025,notayear", headers=manager_headers)
     assert r.status_code == 200
     assert r.json()["years_returned"] == [2025]
+
+
+def test_history_falls_back_to_the_default_when_no_year_asked_for_is_on_file(
+        client, manager_headers, farm_has_gps, monkeypatch):
+    """Dropping every year asked for must not fall through to "no year
+    filter", which is the whole record - a stale tab asking only for a year
+    since removed would be answered with everything, the very thing the
+    parameter exists to stop."""
+    monkeypatch.setattr(weather_module, "fetch_historical_hourly",
+                        lambda *a, **k: {"hourly": {"time": [], }})
+    _seed_years(2019, 2024, 2025)
+
+    body = client.get("/api/weather/history?years=1901", headers=manager_headers).json()
+    assert body["years_returned"] == [2025], "the same default a fresh tab gets"
+    assert {p["year"] for p in body["points"]} == {2025}

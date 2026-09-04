@@ -106,12 +106,16 @@ reaches it from the LAN. One command publishes it to the tailnet, with a
 real Let's Encrypt certificate:
 
 ```bat
-"C:\Program Files\Tailscale\tailscale.exe" serve --bg --https=443 http://localhost:8010
+"C:\Program Files\Tailscale\tailscale.exe" serve --bg --https=8443 http://localhost:8010
 ```
 
+**8443, not 443, because Boord is on the same machine and takes 443** — see
+*Sharing a machine with Boord* below. On a box running only this app, 443 is
+fine and drops the `:8443` from the address.
+
 Needs **HTTPS Certificates** enabled for the tailnet (admin console → DNS).
-The app then answers at `https://<machine>.<tailnet>.ts.net/` for anyone on
-the tailnet — Tailscale terminates TLS and proxies to 8010, and renews the
+The app then answers at `https://<machine>.<tailnet>.ts.net:8443/` for anyone
+on the tailnet — Tailscale terminates TLS and proxies to 8010, and renews the
 certificate itself. `API_BASE` is relative, so nothing in the frontend needs
 to know.
 
@@ -132,8 +136,39 @@ model:
 Note that enabling certificates puts the machine's name into public
 Certificate Transparency logs, which is not reversible.
 
-Port 443 is one slot per machine. Boord on the same box can take
-`--https=8443` if it ever wants HTTPS too.
+### Sharing a machine with Boord
+
+`:443` is one slot per machine, and this app is designed to run beside Boord
+on the farm server — so the two compete for it. Both repos' instructions used
+to tell you to claim 443, and whichever command ran last silently won. The
+other app then became unreachable over Tailscale with nothing reporting an
+error.
+
+**Boord takes 443; this app takes 8443.** Boord is what the farm uses all
+day, and its Field QR scanner only works on an HTTPS origin, so a device
+pointed at the bare `https://<machine>.<tailnet>.ts.net/` has to land on
+Boord.
+
+```bat
+tailscale serve reset
+tailscale serve --bg --https=443  http://localhost:8000
+tailscale serve --bg --https=8443 http://localhost:8010
+```
+
+`tailscale serve status` should then list both.
+
+**The symptom of getting it wrong does not look like a port conflict.** The
+address loads and answers `{"detail":"Not Found"}` — that is the *other*
+FastAPI app replying that it has no such page. Check `tailscale serve status`
+before suspecting anything else. Seen for real on 2026-09-04: `:443` pointed
+here, so Boord's `/admin/` and `/field/` both 404ed and Boord was reachable
+only on `localhost`.
+
+One more consequence worth knowing: the two apps share an origin's worth of
+browser state when they swap ports. Both serve files under `/shared/`, so a
+browser that cached this app's `/shared/api.js` will hand it to Boord after
+the switch. Clear the site data for the host once, on each browser that used
+the old mapping.
 
 ### Environment
 

@@ -267,10 +267,16 @@ set "BOORD_DB_PATH=$boordDb"
     Write-Host ""
     Write-Host " From anywhere else, publish it over Tailscale:"
     Write-Host ""
-    Write-Host "   `"C:\Program Files\Tailscale\tailscale.exe`" serve --bg --https=443 http://localhost:$Port/" -ForegroundColor Yellow
+    Write-Host "   `"C:\Program Files\Tailscale\tailscale.exe`" serve --bg --https=8443 http://localhost:$Port/" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host " It then answers at https://<machine>.<tailnet>.ts.net/ for anyone on"
-    Write-Host " the tailnet, over HTTPS, with no sign-in."
+    Write-Host " It then answers at https://<machine>.<tailnet>.ts.net:8443/ for anyone"
+    Write-Host " on the tailnet, over HTTPS, with no sign-in."
+    Write-Host ""
+    Write-Host " 8443, not 443, IF Boord runs on this machine too - Boord takes 443, and" -ForegroundColor Yellow
+    Write-Host " its Field QR scanner needs to be what the bare address reaches. Both" -ForegroundColor Yellow
+    Write-Host " apps claiming 443 is silent: the last command run wins and the other" -ForegroundColor Yellow
+    Write-Host " app answers {\"detail\":\"Not Found\"}, which looks like anything but a" -ForegroundColor Yellow
+    Write-Host " port clash. Check with: tailscale serve status" -ForegroundColor Yellow
     Write-Host ""
     Write-Warn "There is no password on this app. Whoever can reach it can read every"
     Write-Warn "figure in it, so tailnet membership is the whole of its security."

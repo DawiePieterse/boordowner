@@ -11,8 +11,13 @@ Boord Owner is its own app, running beside Boord on the farm server. Open
 it in any browser, on any phone, tablet, or computer:
 
 ```
-https://bekfontein-server.taile32cb0.ts.net/
+https://<your-server>.<your-tailnet>.ts.net:8443/
 ```
+
+(The farm office has the exact address — ask them once and bookmark it.
+Note the **`:8443`** on the end: Boord itself answers on the same name
+without a port, and leaving the port off lands you on Boord instead of
+here.)
 
 This works from anywhere — home, the office, the orchard — provided
 **Tailscale** is connected on the device you're using (see below). Your

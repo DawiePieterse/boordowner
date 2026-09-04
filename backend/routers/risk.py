@@ -9,7 +9,6 @@ from db import get_boord_session, get_owner_session
 from models_boord import SystemSetting
 from models_owner import HistoricalAnnualYield, WeatherHistory
 from routers.analysis import build_analysis_summary
-from security import get_current_user
 from weather import (farm_coords_and_release, fetch_forecast_hourly, parse_hourly_rows,
                       sync_recent_weather)
 
@@ -405,8 +404,7 @@ def build_risk_summary(boord: Session, owner: Session) -> dict:
 
 @router.get("/summary")
 def risk_summary(boord: Session = Depends(get_boord_session),
-                 owner: Session = Depends(get_owner_session),
-                 user=Depends(get_current_user)):
+                 owner: Session = Depends(get_owner_session)):
     """Risk tab data - see build_risk_summary()."""
     return build_risk_summary(boord, owner)
 
@@ -708,7 +706,6 @@ def build_harvest_forecast(boord: Session, owner: Session) -> dict:
 
 @router.get("/forecast")
 def risk_forecast(boord: Session = Depends(get_boord_session),
-                  owner: Session = Depends(get_owner_session),
-                  user=Depends(get_current_user)):
+                  owner: Session = Depends(get_owner_session)):
     """Harvest Forecast data - see build_harvest_forecast()."""
     return build_harvest_forecast(boord, owner)

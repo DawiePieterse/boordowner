@@ -1,20 +1,14 @@
 // Shared API helpers for the Boord Owner app. Vendored from Boord's
-// frontend/shared/api.js and trimmed to what this app uses - the token key
-// and login endpoint point at the Owner service, not Boord's admin auth.
+// frontend/shared/api.js and trimmed to what this app uses. Boord's token
+// handling did not come across: this app has no sign-in, so api() sends no
+// credentials and there is nothing stored per-user.
 // Everything is served from the same origin as the backend, so API_BASE is relative.
 const API_BASE = "";
 
 const Boord = {
   // Bump on every deploy that touches frontend code. Shown in the header so
   // it's obvious whether a device's cached copy is up to date.
-  VERSION: "1.3.2",
-
-  // The Owner-app session JWT. Deliberately a different localStorage key from
-  // Boord's "boord_admin_token" so the two apps on the same origin can't
-  // read each other's sessions.
-  getToken() { return localStorage.getItem("boord_owner_token"); },
-  setToken(t) { localStorage.setItem("boord_owner_token", t); },
-  clearToken() { localStorage.removeItem("boord_owner_token"); },
+  VERSION: "1.4.0",
 
   getLastReceivedBy() { return localStorage.getItem("boord_last_received_by") || ""; },
   setLastReceivedBy(name) { localStorage.setItem("boord_last_received_by", name); },
@@ -48,30 +42,6 @@ const Boord = {
     return e instanceof TypeError || (!!e && (e.name === "AbortError" || e.name === "TimeoutError"));
   },
 
-  // The human-readable half of a server rejection. api() throws
-  // `${status} ${body}` and FastAPI puts its message in a JSON "detail"
-  // field, so showing e.message raw hands the user a status code and a lump
-  // of JSON. Falls back to the whole message when it isn't shaped that way.
-  errorDetail(e, fallback = "Something went wrong") {
-    // Read .message directly rather than `e.message || e`: an Error with an
-    // empty message would otherwise stringify to the bare word "Error" and
-    // that would win over the caller's fallback.
-    const raw = e && typeof e.message === "string" ? e.message : String(e || "");
-    const body = raw.replace(/^\d{3}\s*/, "");
-    try {
-      const parsed = JSON.parse(body);
-      if (parsed && typeof parsed.detail === "string") return parsed.detail;
-    } catch (_) { /* not JSON - fall through to the raw text */ }
-    return body.trim() || fallback;
-  },
-
-  // True when the server actively rejected the caller's credentials. api()
-  // puts the status code at the front of the error message.
-  isAuthError(e) {
-    const status = parseInt(String(e && e.message).slice(0, 3), 10);
-    return status === 401 || status === 403;
-  },
-
   // Reads a cached JSON blob, tolerating a missing or corrupted entry.
   getCachedJSON(key) {
     try {
@@ -83,24 +53,8 @@ const Boord = {
     }
   },
 
-  async login(username, password) {
-    const body = new URLSearchParams({ username, password });
-    const res = await Boord._fetchWithTimeout(`${API_BASE}/api/owner-auth/login`, { method: "POST", body });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`${res.status} ${text}`);
-    }
-    const data = await res.json();
-    Boord.setToken(data.access_token);
-    return data;
-  },
-
-  async api(path, { method = "GET", body, auth = false, isForm = false, timeoutMs } = {}) {
+  async api(path, { method = "GET", body, isForm = false, timeoutMs } = {}) {
     const headers = {};
-    if (auth) {
-      const token = Boord.getToken();
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-    }
     let payload = body;
     if (body && !isForm) {
       headers["Content-Type"] = "application/json";

@@ -3,7 +3,7 @@
 Two engines, on purpose:
 
   owner_engine - data/owner.db, READ-WRITE. This process is its only writer.
-                 Holds OwnerUser, WeatherHistory, HistoricalHarvest,
+                 Holds WeatherHistory, HistoricalHarvest,
                  HistoricalAnnualYield.
 
   boord_engine - Boord's data/boord.db, READ-ONLY. Boord is the sole writer
@@ -17,11 +17,8 @@ cannot open the -wal/-shm sidecars if Boord ever runs the DB in WAL mode and
 fails with "attempt to write a readonly database". query_only rejects writes
 at the SQL layer while letting SQLite journal normally.
 """
-import os
-import secrets
 import threading
 
-from passlib.context import CryptContext
 from sqlalchemy import event, inspect, pool, text
 from sqlmodel import Session, SQLModel, create_engine, select
 
@@ -30,10 +27,8 @@ import config
 # it registers every Boord mirror table on the shared SQLModel.metadata,
 # which is exactly why init_owner_db() has to pass an explicit table list.
 from models_boord import Block, Supplier
-from models_owner import (HistoricalAnnualYield, HistoricalHarvest, OwnerUser,
+from models_owner import (HistoricalAnnualYield, HistoricalHarvest,
                           WeatherHistory)
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # --------------------------------------------------------------------------- #
 # Owner DB - read/write
@@ -111,7 +106,6 @@ def own_farm_block_ids(session: Session) -> set:
 # Owner DB schema init
 # --------------------------------------------------------------------------- #
 _OWNER_TABLES = [
-    OwnerUser.__table__,
     WeatherHistory.__table__,
     HistoricalHarvest.__table__,
     HistoricalAnnualYield.__table__,
@@ -125,9 +119,14 @@ weather_append_lock = threading.Lock()
 
 def _ensure_owner_columns() -> None:
     """Strictly-additive column top-up for the owner tables, so a new field
-    on OwnerUser (say) reaches an existing owner.db without a migration
+    on WeatherHistory (say) reaches an existing owner.db without a migration
     framework. Never renames, retypes or drops anything - that is all this
-    app's small, single-writer schema needs."""
+    app's small, single-writer schema needs.
+
+    A column added to a table that already has rows lands as NULL in those
+    rows, whatever default the model declares - so code reading a new column
+    has to treat NULL as "this row predates the column" rather than assume
+    the default."""
     insp = inspect(owner_engine)
     existing = set(insp.get_table_names())
     for tbl in _OWNER_TABLES:
@@ -149,7 +148,7 @@ def _ensure_owner_columns() -> None:
 
 
 def init_owner_db() -> None:
-    """Create the four owner tables if missing, then top up columns.
+    """Create the three owner tables if missing, then top up columns.
 
     The explicit `tables=` list is load-bearing: models_boord registers its
     read-only mirror classes on the SAME SQLModel.metadata, so a bare
@@ -157,60 +156,3 @@ def init_owner_db() -> None:
     """
     SQLModel.metadata.create_all(owner_engine, tables=_OWNER_TABLES)
     _ensure_owner_columns()
-
-
-# --------------------------------------------------------------------------- #
-# First-run manager account  (mirrors Boord's db.seed_defaults admin branch)
-# --------------------------------------------------------------------------- #
-DEFAULT_MANAGER_USERNAME = "admin"
-
-# No I, O, 0 or 1: this password gets read off one screen and typed into
-# another by someone who did not choose it.
-_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-
-
-def generate_initial_password() -> str:
-    """A random password - three groups of four, ~60 bits."""
-    groups = ("".join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(4)) for _ in range(3))
-    return "-".join(groups)
-
-
-def _write_initial_password(username: str, password: str) -> None:
-    rule = "=" * 60
-    print(f"\n{rule}\n"
-          f" Boord Owner created a manager account for this install:\n"
-          f"     username: {username}\n"
-          f"     password: {password}\n"
-          f" You will be asked to replace this password at first sign-in.\n"
-          f"{rule}\n", flush=True)
-    try:
-        fd = os.open(config.INITIAL_PASSWORD_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(password + "\n")
-    except OSError as e:
-        print(f"[owner] could not write {config.INITIAL_PASSWORD_FILE} ({e!r}) - the "
-              f"password printed above is now the only copy of it", flush=True)
-
-
-def clear_initial_password_file() -> None:
-    try:
-        os.remove(config.INITIAL_PASSWORD_FILE)
-    except OSError:
-        pass
-
-
-def seed_default_manager() -> None:
-    """On an empty OwnerUser table, create one manager with a generated
-    password. Does nothing once any user exists."""
-    with Session(owner_engine) as session:
-        if session.exec(select(OwnerUser)).first():
-            return
-        initial_password = generate_initial_password()
-        session.add(OwnerUser(
-            username=DEFAULT_MANAGER_USERNAME,
-            password_hash=pwd_context.hash(initial_password),
-            is_manager=True,
-            must_change_password=True,
-        ))
-        session.commit()
-        _write_initial_password(DEFAULT_MANAGER_USERNAME, initial_password)

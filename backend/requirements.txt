@@ -1,8 +1,7 @@
 fastapi==0.115.6
 uvicorn[standard]==0.32.1
 sqlmodel==0.0.22
+# Not auth-related despite the name: routers/historical.py takes UploadFile
+# for the two CSV imports, and FastAPI needs this to parse multipart bodies.
 python-multipart==0.0.20
 openpyxl==3.1.5
-passlib[bcrypt]==1.7.4
-bcrypt==4.0.1
-python-jose[cryptography]==3.3.0

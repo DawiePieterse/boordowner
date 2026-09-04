@@ -2,7 +2,7 @@
 // unavailable, but correctly styled) when the phone has no connection to
 // the farm server. Data always goes over the network when available.
 const CACHE_PREFIX = "boord-owner-";
-const CACHE = "boord-owner-v25";
+const CACHE = "boord-owner-v26";
 const REVALIDATE_TIMEOUT_MS = 10000;
 const SHELL = [
   "./",
@@ -49,10 +49,9 @@ self.addEventListener("fetch", (event) => {
   if (url.pathname.startsWith("/api/")) return; // never cache API calls
   if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
 
-  // Page loads are cached by path only. The Owner View is opened as
-  // /owner/?key=..., and a cache lookup matches the query string too - so
-  // without this the shell would never be found and the page would fail
-  // offline. It also stops one cache entry piling up per distinct link.
+  // Page loads are cached by path only: a cache lookup matches the query
+  // string too, so any link carrying one would miss the stored shell and
+  // fail offline. It also stops one cache entry piling up per distinct link.
   const isPageLoad = event.request.mode === "navigate";
   const cacheKey = isPageLoad ? url.origin + url.pathname : event.request;
 

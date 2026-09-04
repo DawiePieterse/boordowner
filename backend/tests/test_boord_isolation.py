@@ -130,13 +130,13 @@ def test_plain_farm_coords_does_hold_the_connection():
             gen.close()
 
 
-def test_no_boord_connection_is_left_open_after_a_request(client, manager_headers):
+def test_no_boord_connection_is_left_open_after_a_request(client):
     with _OpenConnectionCounter(boord_engine) as counter:
         for path in ("/api/dashboard/summary?period_start=2026-01-01&period_end=2026-12-31",
                      "/api/lots/pending", "/api/lots/in-transit", "/api/lots/received",
                      "/api/suppliers", "/api/system-settings", "/api/analysis/summary",
                      "/api/weather/current"):
-            assert client.get(path, headers=manager_headers).status_code == 200
+            assert client.get(path).status_code == 200
             assert counter.live == 0, f"{path} left Boord's database open"
 
 
@@ -206,7 +206,7 @@ def test_assert_boord_schema_accepts_empty_tables(tmp_path):
 # --------------------------------------------------------------------------- #
 def test_owner_db_holds_only_owner_tables(client):
     assert set(inspect(owner_engine).get_table_names()) == {
-        "owneruser", "weatherhistory", "historicalharvest", "historicalannualyield"}
+        "weatherhistory", "historicalharvest", "historicalannualyield"}
 
 
 def test_init_owner_db_is_idempotent(client):
@@ -219,26 +219,31 @@ def test_init_owner_db_is_idempotent(client):
 def test_ensure_owner_columns_adds_a_missing_column(client):
     """The stand-in for a migration framework: a field added to an owner model
     reaches a database that predates it."""
+    cols = lambda: {c["name"] for c in inspect(owner_engine).get_columns("weatherhistory")}
     with owner_engine.begin() as conn:
-        conn.execute(text('ALTER TABLE owneruser DROP COLUMN token_valid_from'))
-    assert "token_valid_from" not in {c["name"] for c in inspect(owner_engine).get_columns("owneruser")}
+        conn.execute(text('ALTER TABLE weatherhistory DROP COLUMN sunshine_duration_s'))
+    assert "sunshine_duration_s" not in cols()
     init_owner_db()
-    assert "token_valid_from" in {c["name"] for c in inspect(owner_engine).get_columns("owneruser")}
+    assert "sunshine_duration_s" in cols()
 
 
-def test_signing_in_still_works_after_a_column_is_added(client):
-    """A column added to a table that already has rows lands as NULL. For
-    token_valid_from that means comparing a float against None on every
-    authenticated request - a 500 on the whole app, from an upgrade."""
-    import config
-    pw = open(config.INITIAL_PASSWORD_FILE).read().strip()
+def test_rows_predating_an_added_column_read_back_as_none(client):
+    """A column added to a table that ALREADY HAS ROWS lands as NULL in them,
+    whatever default the model declares. Code reading the new column has to
+    treat None as "this row predates the column" - assuming the default is
+    how an upgrade turns into a 500 on the first request that touches it."""
+    from datetime import datetime
+
+    from models_owner import WeatherHistory
+    from sqlmodel import Session, select
+
     with owner_engine.begin() as conn:
-        conn.execute(text('ALTER TABLE owneruser DROP COLUMN token_valid_from'))
+        conn.execute(text('ALTER TABLE weatherhistory DROP COLUMN sunshine_duration_s'))
+        conn.execute(text("INSERT INTO weatherhistory (timestamp, condition) "
+                          "VALUES ('2024-01-01 00:00:00', 'Clear')"))
     init_owner_db()
-    with owner_engine.begin() as conn:
-        assert conn.execute(text("SELECT token_valid_from FROM owneruser")).scalar() is None
 
-    r = client.post("/api/owner-auth/login", data={"username": "admin", "password": pw})
-    assert r.status_code == 200
-    h = {"Authorization": f"Bearer {r.json()['access_token']}"}
-    assert client.get("/api/owner-auth/me", headers=h).status_code == 200
+    with Session(owner_engine) as s:
+        row = s.exec(select(WeatherHistory)).one()
+    assert row.sunshine_duration_s is None
+    assert row.timestamp == datetime(2024, 1, 1, 0, 0, 0)

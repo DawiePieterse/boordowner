@@ -17,7 +17,6 @@ from sqlmodel import Session, select
 
 from db import get_boord_session, get_own_supplier_id
 from models_boord import Block, HarvestRecord, Supplier, Worker
-from security import get_current_user
 from timeutil import day_bounds
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -73,8 +72,7 @@ def _worker_kg_totals(session: Session, period_start: date, period_end: date,
 
 @router.get("/summary")
 def dashboard_summary(period_start: date, period_end: date, supplier_id: Optional[int] = None,
-                      boord: Session = Depends(get_boord_session),
-                      user=Depends(get_current_user)):
+                      boord: Session = Depends(get_boord_session)):
     """Active-entity counts + per-worker and per-block breakdowns, wage-free.
     "Active" means had harvest activity within the filtered period/supplier,
     not a static master-data flag - so the numbers move with the filters."""

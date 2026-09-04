@@ -20,7 +20,6 @@ from sqlmodel import Session, select
 
 from db import get_boord_session
 from models_boord import HarvestRecord, Lot, LotStatus, Supplier, SystemSetting
-from security import get_current_user
 from timeutil import day_bounds
 
 router = APIRouter(tags=["boord-data"])
@@ -94,8 +93,7 @@ def _related_lots(session: Session, lot: Lot, parents_by_slip: dict, children_by
 
 @router.get("/api/lots/pending")
 def list_pending(supplier_id: Optional[int] = None, period_start: Optional[date] = None,
-                 period_end: Optional[date] = None, session: Session = Depends(get_boord_session),
-                 user=Depends(get_current_user)):
+                 period_end: Optional[date] = None, session: Session = Depends(get_boord_session)):
     settings = session.exec(select(SystemSetting)).first() or SystemSetting()
     suppliers = _supplier_map(session)
     query = select(Lot).where(Lot.status == LotStatus.created)
@@ -121,8 +119,7 @@ def list_pending(supplier_id: Optional[int] = None, period_start: Optional[date]
 
 @router.get("/api/lots/in-transit")
 def list_in_transit(supplier_id: Optional[int] = None, period_start: Optional[date] = None,
-                    period_end: Optional[date] = None, session: Session = Depends(get_boord_session),
-                    user=Depends(get_current_user)):
+                    period_end: Optional[date] = None, session: Session = Depends(get_boord_session)):
     settings = session.exec(select(SystemSetting)).first() or SystemSetting()
     suppliers = _supplier_map(session)
     query = select(Lot).where(Lot.status == LotStatus.in_transit)
@@ -144,8 +141,7 @@ def list_in_transit(supplier_id: Optional[int] = None, period_start: Optional[da
 
 @router.get("/api/lots/received")
 def list_received(period_start: Optional[date] = None, period_end: Optional[date] = None,
-                  supplier_id: Optional[int] = None, session: Session = Depends(get_boord_session),
-                  user=Depends(get_current_user)):
+                  supplier_id: Optional[int] = None, session: Session = Depends(get_boord_session)):
     settings = session.exec(select(SystemSetting)).first() or SystemSetting()
     suppliers = _supplier_map(session)
     query = select(Lot).where(Lot.received_at != None)  # noqa: E711
@@ -162,12 +158,12 @@ def list_received(period_start: Optional[date] = None, period_end: Optional[date
 # Suppliers + system settings
 # --------------------------------------------------------------------------- #
 @router.get("/api/suppliers")
-def list_suppliers(session: Session = Depends(get_boord_session), user=Depends(get_current_user)):
+def list_suppliers(session: Session = Depends(get_boord_session)):
     return session.exec(select(Supplier)).all()
 
 
 @router.get("/api/system-settings")
-def system_settings(session: Session = Depends(get_boord_session), user=Depends(get_current_user)):
+def system_settings(session: Session = Depends(get_boord_session)):
     """The install-wide settings the frontend reads: packhouse_name (header),
     GPS (weather), season_start_month/day and current_harvest_year (the
     Season preset - see Boord.seasonYearFor in shared/api.js), and the

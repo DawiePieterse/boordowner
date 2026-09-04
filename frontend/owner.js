@@ -1,65 +1,10 @@
-// Boord Owner: read-only dashboard. Access is a per-user account - the
-// session JWT lives in localStorage under "boord_owner_token" (see
-// shared/api.js). Managers get an extra Users tab.
+// Boord Owner: read-only dashboard. There is no sign-in - the app opens
+// straight onto the Dashboard. Anyone who can reach the server can read
+// everything here, which is deliberate: the server binds 127.0.0.1 and
+// `tailscale serve` publishes it, so tailnet membership IS the access
+// control. See README.md's Access section.
 
 let _systemSettings = null;
-let _me = null;  // { username, is_manager, must_change_password } from /api/owner-auth/me
-
-function _show(id) {
-  ["loginScreen", "passwordSetupScreen", "app"].forEach((s) => {
-    document.getElementById(s).classList.toggle("hidden", s !== id);
-  });
-  // Modals live outside #app, so a screen change has to close them itself -
-  // otherwise a revoked session mid-dialog leaves the login form behind a
-  // dimmed overlay that nothing can dismiss.
-  ["addUserModal", "oneTimePasswordModal"].forEach((m) => {
-    document.getElementById(m).classList.add("hidden");
-  });
-}
-
-function showLogin() { _show("loginScreen"); }
-function showPasswordSetup() { _show("passwordSetupScreen"); }
-
-// A real HTTP 401/403 on an authenticated call means the session is no
-// longer good (expired, password changed elsewhere, account disabled). Drop
-// the token and send the user back to sign in. A NETWORK failure is not this
-// - callers handle that separately as "offline".
-function sessionExpired() {
-  Boord.clearToken();
-  _me = null;
-  Boord.toast("Session ended - sign in again");
-  showLogin();
-}
-
-// The same 401, but on the one call that follows a SUCCESSFUL sign-in: the
-// server has just refused a token it issued itself, seconds ago. Saying
-// "session ended" there is a lie with consequences - the password was right,
-// there was no session to end, and it sends somebody off retyping a password
-// that was never the problem. Both causes are server-side and invisible from
-// this screen (a token_valid_from cutoff in the future, usually from a clock
-// that has since been corrected, or a signing key that changed under a
-// restart), so say that plainly and name the tool that tells them apart.
-function signInRejected(e) {
-  Boord.clearToken();
-  _me = null;
-  showLogin();
-  // The two causes answer with different details and need different fixes,
-  // so translate rather than quoting the server's own wording back - the
-  // revoked-session message is written for a case this is not, and repeating
-  // it here would undo the correction this function exists to make.
-  const revoked = /session ended/i.test(Boord.errorDetail(e, ""));
-  const cause = revoked
-    ? "the account's session cut-off is set in the future, which a server clock "
-      + "that has since been corrected will do"
-    : "the server could not verify a token it had just signed, so its signing "
-      + "key changed underneath it";
-  const err = document.getElementById("loginError");
-  err.textContent = `Your password was accepted, but the server then rejected the `
-    + `session it had just issued - ${cause}. That is a fault on the farm server, `
-    + `not your password. Running scripts/diagnose_auth.py there confirms which, `
-    + `and can repair it.`;
-  err.classList.remove("hidden");
-}
 
 function updateBannerFarmName() {
   const el = document.getElementById("headerFarmName");
@@ -79,7 +24,7 @@ async function updateBannerWeather() {
   const el = document.getElementById("headerWeather");
   if (!el) return;
   try {
-    const w = await Boord.api("/api/weather/current", { auth: true });
+    const w = await Boord.api("/api/weather/current");
     if (w && w.no_location) {
       // The farm's GPS isn't set. Say so rather than leaving the strip blank:
       // Weather, Risk and the Harvest Forecast all stay empty until it is,
@@ -102,10 +47,8 @@ function bindCollapsibles() {
   });
 }
 
-// Shows one tab and loads it. Also used on sign-in to land everyone on the
-// Dashboard: without that, signing out while on the Users tab and back in as
-// somebody who is not a manager left the Users panel on screen, its button
-// hidden but its content still the visible one.
+// Shows one tab and loads it. Also called once at startup to land on the
+// Dashboard.
 function activateTab(name) {
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".tab-content").forEach((c) => c.classList.add("hidden"));
@@ -114,12 +57,12 @@ function activateTab(name) {
   if (name === "analysis") loadAnalysis();
   else if (name === "weather") loadWeather();
   else if (name === "risk") loadRisk();
-  else if (name === "users") loadUsers();
 }
 
 // The one download this app offers: every harvest figure on file, 1987 to
-// the current season, in one workbook. It needs the bearer token, so it
-// cannot be a plain <a href> - fetch it, then hand the blob to the browser.
+// the current season, in one workbook. Fetched rather than linked to: the
+// server takes long enough building it to need the spinner below, and a
+// plain <a href> would report a failure as a broken-looking blank tab.
 function bindHistoricalDataDownload() {
   const btn = document.getElementById("historicalDataBtn");
   if (!btn) return;
@@ -131,10 +74,9 @@ function bindHistoricalDataDownload() {
       // Reads both databases and pivots every season it finds, so it is
       // slower than the tab loads around it.
       const blob = await Boord.api("/api/reports/historical-harvest-data",
-                                   { auth: true, timeoutMs: 60000 });
+                                   { timeoutMs: 60000 });
       Boord.downloadBlob(blob, "Historical_Harvest_Data.xlsx");
     } catch (e) {
-      if (Boord.isAuthError(e)) { sessionExpired(); return; }
       console.error("Historical Harvest Data download failed:", e);
       Boord.toast("Could not build the workbook");
     } finally {
@@ -152,8 +94,7 @@ function bindTabs() {
 
 async function loadAnalysis() {
   await LWAnalysisTab.load(
-    () => Boord.api("/api/analysis/summary", { auth: true }),
-    { onAuthError: sessionExpired },
+    () => Boord.api("/api/analysis/summary"),
   );
 }
 
@@ -175,8 +116,7 @@ async function loadWeather() {
     // fine and still working the whole time.
     (years) => Boord.api(
       `/api/weather/history${years && years.length ? `?years=${years.join(",")}` : ""}`,
-      { auth: true, timeoutMs: 45000 }),
-    { onAuthError: sessionExpired },
+      { timeoutMs: 45000 }),
   );
 }
 
@@ -187,10 +127,9 @@ async function loadRisk() {
     // reference season onward - it was left on the 8s default purely
     // because forecast was the slower of the two when they were written,
     // which stopped being true once a farm backfilled forty years.
-    () => Boord.api("/api/risk/summary", { auth: true, timeoutMs: 45000 }),
+    () => Boord.api("/api/risk/summary", { timeoutMs: 45000 }),
     // This call does real work the default 8s network timeout isn't built for.
-    () => Boord.api("/api/risk/forecast", { auth: true, timeoutMs: 45000 }),
-    { onAuthError: sessionExpired },
+    () => Boord.api("/api/risk/forecast", { timeoutMs: 45000 }),
   );
 }
 
@@ -235,7 +174,7 @@ async function loadSuppliers() {
   const cached = Boord.getCachedJSON("boord_cached_suppliers");
   if (cached) renderSupplierOptions(cached);
   try {
-    const suppliers = await Boord.api("/api/suppliers", { auth: true });
+    const suppliers = await Boord.api("/api/suppliers");
     localStorage.setItem("boord_cached_suppliers", JSON.stringify(suppliers));
     renderSupplierOptions(suppliers);
   } catch (e) { /* keep the cached list, or just "All", if this fails */ }
@@ -338,10 +277,10 @@ async function refreshDashboard() {
   let harvesting, inTransit, received, summary;
   try {
     [harvesting, inTransit, received, summary] = await Promise.all([
-      Boord.api(`/api/lots/pending?${qs}`, { auth: true }),
-      Boord.api(`/api/lots/in-transit?${qs}`, { auth: true }),
-      Boord.api(`/api/lots/received?${qs}`, { auth: true }),
-      Boord.api(`/api/dashboard/summary?${qs}`, { auth: true }),
+      Boord.api(`/api/lots/pending?${qs}`),
+      Boord.api(`/api/lots/in-transit?${qs}`),
+      Boord.api(`/api/lots/received?${qs}`),
+      Boord.api(`/api/dashboard/summary?${qs}`),
     ]);
   } catch (e) {
     // A network failure is NOT an expired session - fall back to cached
@@ -357,8 +296,7 @@ async function refreshDashboard() {
       }
       return;
     }
-    if (Boord.isAuthError(e)) sessionExpired();
-    else Boord.toast("Could not load the dashboard");
+    Boord.toast("Could not load the dashboard");
     return;
   }
   Boord.setOffline(false);
@@ -452,227 +390,27 @@ function renderDashboardLists(harvesting, inTransit, received, summary) {
   `).join("") || `<tr><td class="p-2 text-slate-400" colspan="6">No harvest activity in this period</td></tr>`;
 }
 
-// --------------------------------------------------------------------------
-// Users tab (managers only)
-// --------------------------------------------------------------------------
-function showOneTimePassword(username, password) {
-  document.getElementById("otpUsername").textContent = username;
-  document.getElementById("otpValue").textContent = password;
-  document.getElementById("oneTimePasswordModal").classList.remove("hidden");
-}
+function init() {
+  document.getElementById("appVersion").textContent = `v${Boord.VERSION}`;
+  _systemSettings = Boord.getCachedJSON("boord_cached_settings");
+  updateBannerFarmName();
+  updateBannerClock();
+  setInterval(updateBannerClock, 1000);
 
-function renderUsers(users) {
-  const rows = document.getElementById("usersRows");
-  rows.innerHTML = users.map((u) => {
-    const isSelf = _me && u.username === _me.username;
-    const role = u.is_manager ? "Manager" : "Viewer";
-    const status = u.disabled ? "Disabled"
-      : u.must_change_password ? "Password not set" : "Active";
-    const btn = (act, label, cls) =>
-      `<button data-act="${act}" data-id="${u.id}" data-user="${u.username}" class="${cls} text-xs px-2 py-1 rounded">${label}</button>`;
-    const actions = isSelf ? '<span class="text-xs text-slate-400">you</span>' : [
-      btn("reset", "Reset password", "bg-slate-200"),
-      btn(u.is_manager ? "demote" : "promote", u.is_manager ? "Make viewer" : "Make manager", "bg-slate-200"),
-      btn(u.disabled ? "enable" : "disable", u.disabled ? "Enable" : "Disable", u.disabled ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"),
-      btn("delete", "Delete", "bg-red-100 text-red-800"),
-    ].join(" ");
-    return `<tr class="border-b">
-      <td class="p-2 font-medium">${u.username}</td>
-      <td class="p-2">${role}</td>
-      <td class="p-2">${status}</td>
-      <td class="p-2 text-right space-x-1">${actions}</td>
-    </tr>`;
-  }).join("") || `<tr><td class="p-2 text-slate-400" colspan="4">No users</td></tr>`;
-}
+  bindDashboard();
+  bindCollapsibles();
+  bindTabs();
+  bindHistoricalDataDownload();
+  LWAnalysisTab.bind();
+  LWWeatherTab.bind();
+  LWRiskTab.bind();
 
-async function loadUsers() {
-  if (!_me || !_me.is_manager) return;
-  try {
-    renderUsers(await Boord.api("/api/owner-users", { auth: true }));
-  } catch (e) {
-    if (Boord.isAuthError(e)) return sessionExpired();
-    Boord.toast("Could not load users");
-  }
-}
-
-async function onUsersAction(act, id, username) {
-  try {
-    if (act === "reset") {
-      const r = await Boord.api(`/api/owner-users/${id}/reset-password`, { method: "POST", auth: true });
-      showOneTimePassword(username, r.initial_password);
-    } else if (act === "promote" || act === "demote") {
-      await Boord.api(`/api/owner-users/${id}`, { method: "PATCH", auth: true, body: { is_manager: act === "promote" } });
-    } else if (act === "disable" || act === "enable") {
-      await Boord.api(`/api/owner-users/${id}`, { method: "PATCH", auth: true, body: { disabled: act === "disable" } });
-    } else if (act === "delete") {
-      if (!confirm(`Delete ${username}? They will not be able to sign in.`)) return;
-      await Boord.api(`/api/owner-users/${id}`, { method: "DELETE", auth: true });
-    }
-    await loadUsers();
-  } catch (e) {
-    // Any 401/403 on an authenticated call means this session is no longer
-    // good - the token was revoked, or this account is no longer a manager.
-    // Everything else (the last-manager guard's 400, say) is a message to read.
-    if (Boord.isAuthError(e)) return sessionExpired();
-    Boord.toast(Boord.errorDetail(e, "That change was not allowed"));
-  }
-}
-
-function openAddUser() {
-  document.getElementById("addUserName").value = "";
-  document.getElementById("addUserManager").checked = false;
-  document.getElementById("addUserError").classList.add("hidden");
-  document.getElementById("addUserModal").classList.remove("hidden");
-  document.getElementById("addUserName").focus();
-}
-
-async function submitAddUser(e) {
-  e.preventDefault();
-  const err = document.getElementById("addUserError");
-  err.classList.add("hidden");
-  const username = document.getElementById("addUserName").value.trim();
-  const isManager = document.getElementById("addUserManager").checked;
-  if (!username) return;
-  try {
-    const r = await Boord.api("/api/owner-users", { method: "POST", auth: true, body: { username, is_manager: isManager } });
-    document.getElementById("addUserModal").classList.add("hidden");
-    showOneTimePassword(username, r.initial_password);
-    await loadUsers();
-  } catch (ex) {
-    if (Boord.isAuthError(ex)) {
-      document.getElementById("addUserModal").classList.add("hidden");
-      return sessionExpired();
-    }
-    err.textContent = Boord.errorDetail(ex, "Could not add that user");
-    err.classList.remove("hidden");
-  }
-}
-
-// --------------------------------------------------------------------------
-// Auth wiring + routing
-// --------------------------------------------------------------------------
-function bindAuthForms() {
-  document.getElementById("loginForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const err = document.getElementById("loginError");
-    err.classList.add("hidden");
-    try {
-      const data = await Boord.login(
-        document.getElementById("loginUsername").value.trim(),
-        document.getElementById("loginPassword").value,
-      );
-      document.getElementById("loginPassword").value = "";
-      if (data.must_change_password) { showPasswordSetup(); return; }
-      await route({ afterSignIn: true });
-    } catch (ex) {
-      err.textContent = Boord.isNetworkError(ex)
-        ? "Can't reach the server. Check the connection and try again."
-        : Boord.errorDetail(ex, "Invalid username or password");
-      err.classList.remove("hidden");
-    }
+  Boord.offlineBanner("Offline - data may be out of date");
+  Boord.onOfflineChange = () => { refreshActiveTab(); };
+  LWPTR.attach(async () => {
+    await loadSuppliers();
+    await refreshActiveTab();
   });
-
-  document.getElementById("passwordSetupForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const err = document.getElementById("passwordSetupError");
-    err.classList.add("hidden");
-    const pw = document.getElementById("newPassword").value;
-    const confirmPw = document.getElementById("newPasswordConfirm").value;
-    if (pw !== confirmPw) {
-      err.textContent = "The two passwords don't match.";
-      err.classList.remove("hidden");
-      return;
-    }
-    try {
-      const r = await Boord.api("/api/owner-auth/change-password", { method: "POST", auth: true, body: { new_password: pw } });
-      Boord.setToken(r.access_token);
-      document.getElementById("newPassword").value = "";
-      document.getElementById("newPasswordConfirm").value = "";
-      // Also a token issued seconds ago - by change-password itself - so the
-      // same distinction applies as after a sign-in.
-      await route({ afterSignIn: true });
-    } catch (ex) {
-      // The password rules answer 400; a 401 here means the token that got
-      // us to this screen has since been revoked.
-      if (Boord.isAuthError(ex)) return sessionExpired();
-      err.textContent = Boord.errorDetail(ex, "Could not set that password");
-      err.classList.remove("hidden");
-    }
-  });
-
-  document.getElementById("logoutBtn").addEventListener("click", () => {
-    Boord.clearToken();
-    _me = null;
-    showLogin();
-  });
-
-  document.getElementById("oneTimePasswordModal").addEventListener("click", (e) => {
-    if (e.target.id === "oneTimePasswordModal" || e.target.id === "otpCloseBtn") {
-      document.getElementById("oneTimePasswordModal").classList.add("hidden");
-    }
-  });
-  document.getElementById("addUserBtn").addEventListener("click", openAddUser);
-  document.getElementById("addUserForm").addEventListener("submit", submitAddUser);
-  document.getElementById("addUserCancel").addEventListener("click", () => {
-    document.getElementById("addUserModal").classList.add("hidden");
-  });
-  document.getElementById("usersRows").addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-act]");
-    if (btn) onUsersAction(btn.dataset.act, btn.dataset.id, btn.dataset.user);
-  });
-}
-
-// Decides which screen to show based on the stored token. Called on load,
-// after sign-in, and after the first-login password change.
-async function route({ afterSignIn = false } = {}) {
-  if (!Boord.getToken()) { showLogin(); return; }
-  try {
-    _me = await Boord.api("/api/owner-auth/me", { auth: true });
-  } catch (e) {
-    // A 401 here means two entirely different things depending on where the
-    // token came from: an old one out of localStorage really has expired,
-    // while one minted by the sign-in a moment ago cannot have.
-    if (Boord.isAuthError(e)) { (afterSignIn ? signInRejected : sessionExpired)(e); return; }
-    // Network error: we have a token but can't check it. Go into the app
-    // anyway so the offline dashboard cache is usable; the first real call
-    // that gets a 401 will bounce back to sign-in.
-    _me = _me || { username: "", is_manager: false, must_change_password: false };
-  }
-  if (_me.must_change_password) { showPasswordSetup(); return; }
-  enterApp();
-}
-
-let _appBound = false;
-
-function enterApp() {
-  document.getElementById("headerUser").textContent = _me.username || "";
-  document.getElementById("usersTabBtn").style.display = _me.is_manager ? "" : "none";
-  if (!_me.is_manager) document.getElementById("usersRows").innerHTML = "";
-  _show("app");
-
-  if (!_appBound) {
-    _appBound = true;
-    document.getElementById("appVersion").textContent = `v${Boord.VERSION}`;
-    _systemSettings = Boord.getCachedJSON("boord_cached_settings");
-    updateBannerFarmName();
-    updateBannerClock();
-    setInterval(updateBannerClock, 1000);
-
-    bindDashboard();
-    bindCollapsibles();
-    bindTabs();
-    bindHistoricalDataDownload();
-    LWAnalysisTab.bind();
-    LWWeatherTab.bind();
-    LWRiskTab.bind();
-
-    Boord.offlineBanner("Offline - data may be out of date");
-    Boord.onOfflineChange = () => { refreshActiveTab(); };
-    LWPTR.attach(async () => {
-      await loadSuppliers();
-      await refreshActiveTab();
-    });
-  }
 
   activateTab("dashboard");
 
@@ -687,21 +425,15 @@ function enterApp() {
 
 async function refreshAppData() {
   try {
-    _systemSettings = await Boord.api("/api/system-settings", { auth: true });
+    _systemSettings = await Boord.api("/api/system-settings");
     localStorage.setItem("boord_cached_settings", JSON.stringify(_systemSettings));
     updateBannerFarmName();
   } catch (e) {
-    if (Boord.isAuthError(e)) return sessionExpired();
     if (Boord.isNetworkError(e)) Boord.setOffline(true);
   }
   updateBannerWeather();
   await loadSuppliers();
   await refreshDashboard();
-}
-
-async function init() {
-  bindAuthForms();
-  await route();
 }
 
 if ("serviceWorker" in navigator) {

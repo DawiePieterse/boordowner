@@ -11,8 +11,8 @@
 // blending real short-range weather forecast with historical-scenario
 // ranges for whatever part of the season hasn't happened yet.
 // Renders the Risk tab from /api/risk/summary + /api/risk/forecast. Once
-// shared with Boord's admin app and the old token-authenticated Owner View,
-// both of which are gone - see weather-tab.js, same as analysis-tab.js.
+// shared with Boord's admin app and the old Owner View inside it, both of
+// which are gone - see weather-tab.js, same as analysis-tab.js.
 const LWRiskTab = (() => {
   let _data = null;
   let _bound = false;
@@ -52,13 +52,13 @@ const LWRiskTab = (() => {
   }
 
   // fetchSummary/fetchForecast: () => Promise<data> - the caller supplies
-  // the calls (owner.js: Boord.api with the session bearer token). The
+  // the calls (owner.js: Boord.api). The
   // forecast call is kicked off alongside the summary
   // one but handled independently: a forecast/Open-Meteo hiccup shows a
   // "currently unavailable" note in just that card rather than failing the
   // whole tab - the score header, back-test charts and methodology all
   // still render from the summary call alone.
-  async function load(fetchSummary, fetchForecast, { onAuthError } = {}) {
+  async function load(fetchSummary, fetchForecast) {
     const forecastPromise = fetchForecast().catch((e) => {
       console.error("Forecast load failed:", e);
       return null;
@@ -69,7 +69,6 @@ const LWRiskTab = (() => {
       data = await fetchSummary();
     } catch (e) {
       if (Boord.isNetworkError(e)) { Boord.setOffline(true); return; }
-      if (Boord.isAuthError(e) && onAuthError) { onAuthError(e); return; }
       console.error("Risk load failed:", e);
       Boord.toast("Could not load risk data");
       return;

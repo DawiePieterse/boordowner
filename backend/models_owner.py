@@ -4,48 +4,16 @@ ever reads.
 
 WeatherHistory / HistoricalHarvest / HistoricalAnnualYield are copied
 verbatim from Boord at the commit that removed them (git 2226750), so the
-import scripts and the recovered selftests keep working unchanged. OwnerUser
-is new - it is what replaces the single shared ?key= token the Owner View
-used inside Boord.
+import scripts and the recovered selftests keep working unchanged.
+
+There is no user table: the app has no sign-in. Reaching it at all is the
+whole of its access control, and that is the tailnet's job - see the
+Access section of README.md.
 """
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
-
-
-def _now_epoch() -> float:
-    """Sub-second Unix timestamp. Sub-second matters: a password change and
-    the replacement token it issues can land in the same wall-clock second,
-    and an integer cutoff would either spare the old token or kill the new
-    one."""
-    return datetime.now(timezone.utc).timestamp()
-
-
-class OwnerUser(SQLModel, table=True):
-    """A person who may sign in to the Owner app. Managed in-app by any user
-    with is_manager set (routers/users.py); the first account is seeded as a
-    manager on an empty database (db.seed_default_manager)."""
-    id: Optional[int] = Field(default=None, primary_key=True)
-    username: str = Field(unique=True, index=True)
-    password_hash: str
-    # Can add / disable / reset other OwnerUsers. At least one enabled
-    # manager must always exist - routers/users.py enforces it.
-    is_manager: bool = False
-    # A disabled account cannot sign in and its live tokens stop working on
-    # their next request (security.get_current_user checks both this and
-    # token_valid_from).
-    disabled: bool = False
-    # True while the account still holds the password a manager generated for
-    # it. Every real endpoint refuses such a token (403) except
-    # change-password, so the first sign-in is forced to replace it.
-    must_change_password: bool = True
-    # Unix timestamp (sub-second). Any JWT whose iat is before this instant
-    # is rejected. Bumped on every password change, on a manager
-    # password-reset, and on disable - so each of those revokes the account's
-    # existing sessions within one request, with no server-side session store.
-    token_valid_from: float = Field(default_factory=_now_epoch)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class HistoricalHarvest(SQLModel, table=True):

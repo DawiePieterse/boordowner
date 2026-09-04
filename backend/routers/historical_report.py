@@ -26,7 +26,6 @@ from db import get_boord_session, get_owner_session, own_farm_block_ids
 from models_boord import Block, HarvestRecord, SystemSetting
 from models_owner import HistoricalAnnualYield, HistoricalHarvest
 from routers.analysis import _block_sort_key
-from security import get_current_user
 from timeutil import season_year_for, to_local
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
@@ -48,8 +47,7 @@ def _style_header_cell(cell):
 
 @router.get("/historical-harvest-data")
 def historical_harvest_data_report(boord: Session = Depends(get_boord_session),
-                                   owner: Session = Depends(get_owner_session),
-                                   user=Depends(get_current_user)):
+                                   owner: Session = Depends(get_owner_session)):
     """Historical Harvest Data: every harvest figure this farm has on file,
     1987 through the current season, in one workbook. Not date-range
     filtered like the other reports - there's only ever one of these.

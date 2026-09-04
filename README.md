@@ -4,7 +4,8 @@ The owner's view of the farm: the season against its own history, the weather
 record, and the risk and harvest-forecast figures built from both. It used to
 be a fourth screen inside Boord, reached by a single shared link. It is its
 own application now, run **beside Boord on the farm server** — its own
-process, its own port, its own login.
+process, its own port, and no login at all: it is published over Tailscale
+and reaching it is the whole of the access control (see **Access** below).
 
 ## What it is
 
@@ -12,47 +13,42 @@ A single `uvicorn main:app` service that:
 
 - serves a four-tab read-only frontend — **Dashboard** (the Admin
   Dashboard's figures minus wages), **Analysis**, **Weather**, **Risk**;
-- authenticates its own named users against its own database, with an
-  in-app **Users** screen for managers to add / disable / reset people;
 - reads Boord's live `boord.db` **read-only** for the harvest, lot,
   worker, block and supplier data;
 - owns a separate database for the weather record and the seasons before
   Boord.
 
-Owner-app users see the summary the Admin Dashboard shows and the three
-analytical tabs. They never see Boord's setup or detail screens — those
-live in Boord and were never part of this app.
+Whoever opens it sees the summary the Admin Dashboard shows and the three
+analytical tabs. Boord's setup and detail screens are not here — those live
+in Boord and were never part of this app.
 
 ## Layout
 
 ```
 backend/
   main.py            FastAPI app: startup checks, router registration, static mount
-  config.py          paths + env (OWNER_DB_PATH, BOORD_DB_PATH, OWNER_PORT, OWNER_SECRET_KEY)
+  config.py          paths + env (OWNER_DB_PATH, BOORD_DB_PATH, OWNER_PORT)
   db.py              two engines: owner.db (read-write) + boord.db (read-only, PRAGMA query_only)
-  security.py        bcrypt + HS256 JWT; get_current_user / get_current_manager
-  models_owner.py    OwnerUser, WeatherHistory, HistoricalHarvest, HistoricalAnnualYield
+  models_owner.py    WeatherHistory, HistoricalHarvest, HistoricalAnnualYield
   models_boord.py    read-only field-subset mirrors of Boord's Block/Worker/Supplier/…
   weather.py         Open-Meteo fetch/parse + WeatherHistory sync (session-split)
   timeutil.py        day_bounds / to_local, copied from Boord
   excel_io.py        parse_uploaded_table, for the historical imports
   migrate.py         shim: run_migrations() -> init_owner_db()
   routers/
-    auth.py          /api/owner-auth/{login,change-password,me}
-    users.py         /api/owner-users  (manager-gated CRUD, last-manager guard)
     dashboard.py     /api/dashboard/summary  (wage-free)
     boord_data.py    /api/lots/*, /api/suppliers, /api/system-settings  (read boord.db)
     analysis.py      /api/analysis/summary
     weather.py       /api/weather/{current,history,history/backfill}
     risk.py          /api/risk/{summary,forecast}
-    historical.py    /api/historical-*/import  (manager-gated)
+    historical.py    /api/historical-*/import
     historical_report.py   /api/reports/historical-harvest-data (the XLSX workbook)
-  tests/             pytest: auth, data endpoints, ported risk-function tests
+  tests/             pytest: data endpoints, Boord isolation, ported risk-function tests
 frontend/
-  index.html         login + first-login password screen, the four tabs, the Users tab
-  owner.js           token handling, routing, dashboard cache, Users UI
+  index.html         the four tabs
+  owner.js           startup, tab routing, dashboard offline cache
   service-worker.js  offline shell, cache prefix "boord-owner-"
-  shared/            vendored from Boord: api.js (token key "boord_owner_token"),
+  shared/            vendored from Boord: api.js (no credentials sent),
                      styles.css, tailwind.js, ptr.js, fontawesome, charts + tab modules
 scripts/             the four historical-import scripts (need BOORD_DB_PATH set),
                      block_renames.py (workbook block ids -> Boord's register)
@@ -73,8 +69,8 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 BOORD_DB_PATH=../../Boord/data/boord.db .venv/bin/python run_preview.py
 ```
 
-Then open `http://localhost:8010/`. The console prints a generated `admin`
-password on first run; you are forced to replace it at first sign-in.
+Then open `http://localhost:8010/`. There is no sign-in — it opens straight
+onto the Dashboard.
 
 **Tests:**
 
@@ -87,31 +83,54 @@ needed, makes the venv, asks where Boord's `boord.db` is, writes
 `start_owner_server.bat`, opens firewall port 8010, and registers a
 `Boord Owner Server` scheduled task that runs as SYSTEM at boot (same account
 as Boord's task, so it can read `boord.db` and its `-wal`/`-shm` sidecars).
-It prints the generated `admin` password at the end, and finishes by telling
-you to write the release key's fingerprint into `data/release_key.fpr` —
-which is what makes updates possible at all (see below).
+It finishes by telling you to write the release key's fingerprint into
+`data/release_key.fpr` — which is what makes updates possible at all (see
+below).
+
+Note it binds the server to `127.0.0.1` and does **not** open a firewall
+port; an upgrade actively deletes the port-8010 rule older versions added.
+Publishing the app is `tailscale serve`'s job — see **Access** below.
 
 `update_owner_server.bat` installs the newest **signed** release and
 restarts.
 
-**HTTPS over Tailscale (optional).** The app is plain http on port 8010,
-which is fine on the farm's own LAN but makes every browser off-farm say
-"Not secure". One command on the server puts a real Let's Encrypt
-certificate in front of it:
+### Access
+
+**There is no sign-in.** Every endpoint answers anyone who can reach the
+port, so *reaching it* is the entire access control. That is a deliberate
+trade for a two-person farm app, and it only holds while the network side
+is set up as below.
+
+The server binds `127.0.0.1` (see `install.ps1`'s launcher step), so nothing
+reaches it from the LAN. One command publishes it to the tailnet, with a
+real Let's Encrypt certificate:
 
 ```bat
 "C:\Program Files\Tailscale\tailscale.exe" serve --bg --https=443 http://localhost:8010
 ```
 
 Needs **HTTPS Certificates** enabled for the tailnet (admin console → DNS).
-The app then answers at `https://<machine>.<tailnet>.ts.net/`, still only
-inside the tailnet — Tailscale terminates TLS and proxies to 8010, and
-renews the certificate itself. `API_BASE` is relative, so nothing in the
-frontend needs to know.
+The app then answers at `https://<machine>.<tailnet>.ts.net/` for anyone on
+the tailnet — Tailscale terminates TLS and proxies to 8010, and renews the
+certificate itself. `API_BASE` is relative, so nothing in the frontend needs
+to know.
 
-Use `serve`, never `funnel`: funnel would publish the login page on the
-open internet. Note that enabling certificates puts the machine's name into
-public Certificate Transparency logs, which is not reversible.
+Three things follow from having no password, and they are the whole security
+model:
+
+- **Use `serve`, never `funnel`.** Funnel would publish the farm's complete
+  figures on the open internet to anyone who guessed the URL. There is no
+  login screen behind it to stop them.
+- **Do not widen the bind to `0.0.0.0`.** That re-opens the app to every
+  device on the farm's wifi. It is how this used to be deployed, back when a
+  password stood in front of it.
+- **Tailnet membership is the only revocation.** Removing a departed
+  person's device in the Tailscale admin console is the one way to take
+  access away; there is no account to disable and no audit trail of who
+  looked at what.
+
+Note that enabling certificates puts the machine's name into public
+Certificate Transparency logs, which is not reversible.
 
 Port 443 is one slot per machine. Boord on the same box can take
 `--https=8443` if it ever wants HTTPS too.
@@ -121,7 +140,6 @@ Port 443 is one slot per machine. Boord on the same box can take
 | Var | Required | Meaning |
 | --- | --- | --- |
 | `BOORD_DB_PATH` | yes on the farm server | absolute path to Boord's `data/boord.db` (dev defaults to `../Boord/data/boord.db`) |
-| `OWNER_SECRET_KEY` | no | JWT signing key; generated once into `data/.owner_secret_key` if unset |
 | `OWNER_PORT` | no | default 8010 |
 | `OWNER_DATA_DIR` | no | default `<repo>/data` |
 
@@ -163,27 +181,16 @@ whether a device's cached copy is actually the release you think it is.
 
 ## Authentication
 
-Per-user accounts, modelled on Boord's admin auth: bcrypt password hashes,
-30-day HS256 JWT bearer tokens, a signing key that survives restarts.
-Beyond Boord:
+None. There is no user table, no password, no token, and no session — the
+app answers whoever reaches it. See **Access** above for what carries that
+weight instead, and why the `127.0.0.1` bind and `tailscale serve` are not
+optional.
 
-- **Multiple users.** `OwnerUser` is a real table. The first account
-  (`admin`) is seeded as a manager with a generated password on an empty
-  database.
-- **A manager role.** `is_manager` users get `/api/owner-users` and the
-  Users tab: add a colleague (returns a one-time password shown once),
-  reset a forgotten password, disable someone who has left, delete an
-  account added by mistake, promote/demote.
-  At least one enabled manager must always exist — the CRUD refuses any
-  change that would break that.
-- **Fast revocation.** `get_current_user` loads the user row on every
-  request. A `disabled` account is rejected immediately. Every password
-  change / reset / disable bumps `OwnerUser.token_valid_from`, and any JWT
-  minted before that instant (sub-second precision) is rejected — so those
-  actions end the account's existing sessions on their next request, with
-  no server-side session store.
-
-The old single shared `?key=` token (`OwnerViewToken`) is gone.
+This replaced per-user accounts (`OwnerUser`, bcrypt, 30-day HS256 JWTs, a
+manager role and a Users tab), which in turn replaced the single shared
+`?key=` link token (`OwnerViewToken`) the Owner View used inside Boord. Both
+are gone. Two people use this app and both reach it over Tailscale, so the
+accounts were machinery guarding a door the tailnet already guards.
 
 ## Data ownership
 
@@ -221,11 +228,11 @@ migrates it on every startup. This app opens it read-only
   read-only handle can't open the `-wal`/`-shm` sidecars if Boord ever runs
   the DB in WAL mode. Confirm `journal_mode` on the real server if in doubt.
 
-**This app owns `data/owner.db`** — `OwnerUser`, `WeatherHistory`,
-`HistoricalHarvest`, `HistoricalAnnualYield`. `WeatherHistory` and the two
-history tables are copied verbatim from Boord (git `2226750`) so the import
-scripts stay valid. Schema init is `create_all` on an explicit four-table
-list plus an additive column top-up (`db._ensure_owner_columns`) — no
+**This app owns `data/owner.db`** — `WeatherHistory`, `HistoricalHarvest`,
+`HistoricalAnnualYield`, all three copied verbatim from Boord (git
+`2226750`) so the import scripts stay valid. Schema init is `create_all` on
+an explicit three-table list plus an additive column top-up
+(`db._ensure_owner_columns`) — no
 Alembic; the schema is small and single-writer. Import the pre-Boord
 history with `scripts/import_historical_*.py` (the weather ones need
 `BOORD_DB_PATH` set — they read the farm GPS from Boord); `docs/HISTORICAL_DATA.md`
@@ -245,20 +252,19 @@ readout and the per-crate dispatch stamp) and never touched `WeatherHistory`.
 | the history half of `weather.py` + `/api/weather/history` | `backend/weather.py` + `backend/routers/weather.py` |
 | the Historical Harvest Data XLSX report | `backend/routers/historical_report.py` |
 | the four import scripts / two CSV templates | `scripts/` / `templates/` |
-| `OwnerViewToken` + the `?key=` link | replaced by `OwnerUser` + login |
+| `OwnerViewToken` + the `?key=` link | dropped; access is the tailnet (see **Access**) |
 
 ## Tests
 
 ```bash
-cd backend && .venv/bin/python -m pytest        # 83 tests, ~75s (bcrypt-bound)
+cd backend && .venv/bin/python -m pytest        # 74 tests, well under a second
 ```
 
 | File | Covers |
 | --- | --- |
-| `test_auth.py` | login, the forced first-login password change, token revocation on change/reset/disable, manager gating, the last-manager guard, seeding |
-| `test_data_endpoints.py` | auth on every route, the wage-free dashboard shape, the own-farm supplier filter, sorting and derived per-block figures, the season anchor, own-farm block scoping, the XLSX workbook |
+| `test_data_endpoints.py` | every route answering without credentials, the wage-free dashboard shape, the own-farm supplier filter, sorting and derived per-block figures, the season anchor, own-farm block scoping, the XLSX workbook |
 | `test_boord_schema.py` | the mirror and the boot check, against a real `../Boord` checkout — skipped when there isn't one |
-| `test_boord_isolation.py` | writes refused (ORM *and* raw SQL), connections released, schema-drift detection, owner.db holding only its own four tables |
+| `test_boord_isolation.py` | writes refused (ORM *and* raw SQL), connections released, schema-drift detection, owner.db holding only its own three tables, the additive-column upgrade path |
 | `test_weather_and_history.py` | no Boord connection open during a fetch, graceful degradation when Open-Meteo is down, the historical CSV imports |
 | `test_risk_functions.py` | the Risk/Forecast maths, ported from Boord's `scripts/selftest.py` |
 

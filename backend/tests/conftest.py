@@ -1,8 +1,8 @@
 """Test fixtures.
 
 Every environment variable the app reads is set here BEFORE `config` (and
-therefore `db`, `security`, `main`) is imported, because those modules read
-their configuration at import time.
+therefore `db`, `main`) is imported, because those modules read their
+configuration at import time.
 
 The fake Boord database is built from models_boord's own (partial) mirror
 schema - the suite never needs a real Boord checkout.
@@ -17,7 +17,6 @@ _TMP = tempfile.mkdtemp(prefix="boordowner-tests-")
 os.environ["OWNER_DATA_DIR"] = _TMP
 os.environ["OWNER_DB_PATH"] = os.path.join(_TMP, "owner.db")
 os.environ["BOORD_DB_PATH"] = os.path.join(_TMP, "boord.db")
-os.environ["OWNER_SECRET_KEY"] = "test-secret-key-not-for-production"
 
 from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
 
@@ -124,49 +123,13 @@ from db import owner_engine  # noqa: E402
 @pytest.fixture()
 def client():
     from fastapi.testclient import TestClient
-    # Fresh owner.db per test: several tests change the seeded password (which
-    # deletes the initial-password file) or add users, and startup only seeds
-    # into an empty table.
+    # Fresh owner.db per test: the history tables are written by the import
+    # endpoints, and a test must not see rows another one left behind.
     owner_engine.dispose()
     for suffix in ("", "-wal", "-shm"):
         try:
             os.remove(config.OWNER_DB_PATH + suffix)
         except OSError:
             pass
-    try:
-        os.remove(config.INITIAL_PASSWORD_FILE)
-    except OSError:
-        pass
-    with TestClient(main.app) as c:   # startup: init_owner_db + seed_default_manager
+    with TestClient(main.app) as c:   # startup: init_owner_db
         yield c
-
-
-@pytest.fixture()
-def manager_headers(client):
-    """A signed-in manager past the first-login password change."""
-    pw = open(config.INITIAL_PASSWORD_FILE).read().strip()
-    r = client.post("/api/owner-auth/login", data={"username": "admin", "password": pw})
-    tok = r.json()["access_token"]
-    r = client.post("/api/owner-auth/change-password",
-                    json={"new_password": "manager-pass-1"},
-                    headers={"Authorization": f"Bearer {tok}"})
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}
-
-
-@pytest.fixture()
-def make_user(client, manager_headers):
-    """Factory: create a user, complete their password change, return
-    (id, headers). is_manager defaults to False."""
-    def _make(username, is_manager=False):
-        r = client.post("/api/owner-users",
-                        json={"username": username, "is_manager": is_manager},
-                        headers=manager_headers)
-        assert r.status_code == 200, r.text
-        uid, otp = r.json()["id"], r.json()["initial_password"]
-        tok = client.post("/api/owner-auth/login",
-                          data={"username": username, "password": otp}).json()["access_token"]
-        r = client.post("/api/owner-auth/change-password",
-                        json={"new_password": f"{username}-pass-1"},
-                        headers={"Authorization": f"Bearer {tok}"})
-        return uid, {"Authorization": f"Bearer {r.json()['access_token']}"}
-    return _make

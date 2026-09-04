@@ -1,7 +1,7 @@
 // Analysis tab (historical 2020-2025 vs current season): season pace,
 // per-block/variety yield, season length, monthly volume, PDF export.
 // Renders it from /api/analysis/summary. Once shared with Boord's admin app
-// and the old token-authenticated Owner View, both of which are gone - see
+// and the old Owner View inside it, both of which are gone - see
 // weather-tab.js. The module keeps its screen-agnostic shape (the caller
 // supplies the fetch) because that is still the cleaner seam, not because
 // anything else renders it.
@@ -10,9 +10,9 @@ const LWAnalysisTab = (() => {
   let _bound = false;
 
   function bind() {
-    // bind() is public and the page never reloads - logout() just swaps the
-    // visible div - so a second call is always one caller away. owner.js
-    // happens to guard its own bind* run (_appBound), but without this a
+    // bind() is public and the page never reloads, so a second call is
+    // always one caller away. owner.js calls it once from init(), but
+    // without this a
     // caller that did bind twice would stack a second delegated listener on
     // #tab-analysis, and one click on a chart's PDF button would rasterize
     // and download the same file twice.
@@ -53,20 +53,14 @@ const LWAnalysisTab = (() => {
   }
 
   // fetchSummary: () => Promise<data> - the caller supplies the call
-  // (owner.js: Boord.api with the session bearer token).
-  // onAuthError: called ONLY on a genuine 401/403, which ends the session and
-  // returns to the sign-in screen. Anything else (a 500, a malformed
-  // response) must fall through to the toast: signing somebody out because
-  // the server hit a bug would be both wrong and a direct contradiction of
-  // the manual's promise that being signed out never means a server
-  // problem.
-  async function load(fetchSummary, { onAuthError } = {}) {
+  // (owner.js: Boord.api). A network failure flips the offline banner;
+  // anything else (a 500, a malformed response) falls through to the toast.
+  async function load(fetchSummary) {
     let data;
     try {
       data = await fetchSummary();
     } catch (e) {
       if (Boord.isNetworkError(e)) { Boord.setOffline(true); return; }
-      if (Boord.isAuthError(e) && onAuthError) { onAuthError(e); return; }
       console.error("Analysis load failed:", e);
       Boord.toast("Could not load analysis data");
       return;

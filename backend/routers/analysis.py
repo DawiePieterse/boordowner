@@ -7,7 +7,6 @@ from sqlmodel import Session, select
 from db import get_boord_session, get_owner_session, own_farm_block_ids
 from models_boord import Block, HarvestRecord, SystemSetting
 from models_owner import HistoricalHarvest
-from security import get_current_user
 from timeutil import season_day, season_year_for, to_local
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
@@ -25,8 +24,7 @@ def _block_sort_key(block_id: str):
 
 @router.get("/summary")
 def analysis_summary(boord: Session = Depends(get_boord_session),
-                     owner: Session = Depends(get_owner_session),
-                     user=Depends(get_current_user)):
+                     owner: Session = Depends(get_owner_session)):
     """Analysis data - see build_analysis_summary() for what it computes."""
     return build_analysis_summary(boord, owner)
 

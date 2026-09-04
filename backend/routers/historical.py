@@ -35,7 +35,6 @@ from sqlmodel import Session, delete, select
 from db import get_owner_session
 from excel_io import parse_uploaded_table
 from models_owner import HistoricalAnnualYield, HistoricalHarvest
-from security import get_current_manager
 
 router = APIRouter(prefix="/api", tags=["historical"])
 
@@ -126,8 +125,7 @@ def _check_usable(rows: list, kept: int, rejected: list) -> None:
 
 
 @router.post("/historical-harvest/import")
-async def import_historical_harvest(file: UploadFile, owner: Session = Depends(get_owner_session),
-                                     mgr=Depends(get_current_manager)):
+async def import_historical_harvest(file: UploadFile, owner: Session = Depends(get_owner_session)):
     """Daily per-block kg from seasons before the app existed.
 
     Columns: block_id, date, kg, and optionally season_year and estimated.
@@ -165,8 +163,7 @@ async def import_historical_harvest(file: UploadFile, owner: Session = Depends(g
 
 
 @router.post("/historical-annual-yield/import")
-async def import_historical_annual_yield(file: UploadFile, owner: Session = Depends(get_owner_session),
-                                          mgr=Depends(get_current_manager)):
+async def import_historical_annual_yield(file: UploadFile, owner: Session = Depends(get_owner_session)):
     """Season totals from further back than daily records reach.
 
     Columns: season_year, kg, and optionally block_id and estimated. A blank

@@ -6,10 +6,9 @@
 // It was written to serve two callers - Boord's admin app and the old
 // Owner View, which reached the same figures through /api/owner-view/*
 // with a shared link token. Both are gone: the tab left Boord with the
-// history tables, and the link was replaced by per-user accounts. The
-// module keeps its screen-agnostic shape (the caller supplies the fetch)
-// because that is still the cleaner seam, not because anything else
-// renders it.
+// history tables, and the Owner View became this app. The module keeps its
+// screen-agnostic shape (the caller supplies the fetch) because that is
+// still the cleaner seam, not because anything else renders it.
 //
 // Years are always overlaid on a shared 1 Jan - 31 Dec x-axis, one line per
 // selected year, defaulting to the most recent year on file. There used to
@@ -139,14 +138,13 @@ const LWWeatherTab = (() => {
   // fetchHistory: (years) => Promise<data>, where `years` is an array of
   // calendar years to fetch (empty/omitted on the first call, which lets the
   // server pick the most recent one it has).
-  async function load(fetchHistory, { onAuthError } = {}) {
+  async function load(fetchHistory) {
     _fetchHistory = fetchHistory;
     let data;
     try {
       data = await fetchHistory([..._selectedYears]);
     } catch (e) {
       if (Boord.isNetworkError(e)) { Boord.setOffline(true); return; }
-      if (Boord.isAuthError(e) && onAuthError) { onAuthError(e); return; }
       console.error("Weather load failed:", e);
       Boord.toast("Could not load weather data");
       return;

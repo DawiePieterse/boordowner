@@ -20,7 +20,6 @@ $FirewallRuleName = "Boord Owner Server"
 $PythonVersion = "3.11.9"
 $PythonInstallerUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-amd64.exe"
 $LauncherPath = Join-Path $RepoRoot "start_owner_server.bat"
-$InitialPasswordFile = Join-Path $DataDir "initial_owner_password.txt"
 $ReleaseKeyPath = Join-Path $RepoRoot "release-key.asc"
 $FprFile = Join-Path $DataDir "release_key.fpr"
 # The default guess for Boord's database, if Boord is checked out beside this repo.
@@ -201,20 +200,30 @@ try {
 
     # --- Step 6: Launcher ---
     Write-Step "Creating the server launcher..."
+    # --host 127.0.0.1 is load-bearing, not a default. The app has no sign-in
+    # of its own, so whoever can reach this port can read the farm's figures.
+    # Binding loopback means the only way in is `tailscale serve`, which
+    # proxies to http://localhost:8010 and is reachable inside the tailnet
+    # only. Widening this to 0.0.0.0 publishes the whole dashboard to anyone
+    # on the farm's wifi, with no password to stop them.
     $launcher = @"
 @echo off
 cd /d "$BackendDir"
 set "BOORD_DB_PATH=$boordDb"
-"$venvPython" -m uvicorn main:app --host 0.0.0.0 --port $Port
+"$venvPython" -m uvicorn main:app --host 127.0.0.1 --port $Port
 "@
     Set-Content -Path $LauncherPath -Value $launcher -Encoding ASCII
     Write-Ok "Created $LauncherPath"
 
     # --- Step 7: Firewall ---
-    Write-Step "Allowing the app through Windows Firewall..."
+    # Nothing to open: the server listens on loopback only, so no inbound rule
+    # can reach it. This DELETES the rule older installers added - upgrading a
+    # server that already had port $Port open to the LAN has to close it, or
+    # the whole point of the loopback bind is lost on exactly the machines
+    # that have been running longest.
+    Write-Step "Closing the firewall port older versions opened..."
     netsh advfirewall firewall delete rule name="$FirewallRuleName" | Out-Null
-    netsh advfirewall firewall add rule name="$FirewallRuleName" dir=in action=allow protocol=TCP localport=$Port | Out-Null
-    Write-Ok "Firewall rule set for port $Port"
+    Write-Ok "Port $Port is not exposed to the network (reachable via Tailscale only)"
 
     # --- Step 8: Scheduled task (auto-start at boot, runs as SYSTEM so it can
     #     read boord.db and its -wal/-shm sidecars, same account as Boord's task) ---
@@ -248,31 +257,26 @@ set "BOORD_DB_PATH=$boordDb"
         Write-Warn "rather than being swallowed by the Scheduled Task."
     }
 
-    # --- Step 11: Report the address and the first password ---
-    $ip = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-        Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" -and $_.PrefixOrigin -ne "WellKnown" } |
-        Select-Object -First 1 -ExpandProperty IPAddress
-
+    # --- Step 11: Report the address and how to publish it ---
     Write-Host ""
     Write-Host "================================================" -ForegroundColor Cyan
     Write-Host " Setup complete!" -ForegroundColor Green
     Write-Host "================================================" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host " On this PC:                        http://localhost:$Port/"
-    if ($ip) { Write-Host " From other devices on the network: http://$ip`:$Port/" }
+    Write-Host " On this PC: http://localhost:$Port/"
     Write-Host ""
-    if (Test-Path $InitialPasswordFile) {
-        $pw = (Get-Content $InitialPasswordFile -TotalCount 1).Trim()
-        Write-Host " Sign in as:         admin"
-        Write-Host " With this password: $pw" -ForegroundColor Yellow
-        Write-Host ""
-        Write-Warn "Write it down now. It was generated for this server alone, and you"
-        Write-Warn "will be asked to replace it at first sign-in. Once you have, the copy"
-        Write-Warn "in data\initial_owner_password.txt is deleted automatically."
-        Write-Warn "Add more people from the Users tab once you are in."
-    } else {
-        Write-Host " Sign in with the manager password already set on this server."
-    }
+    Write-Host " From anywhere else, publish it over Tailscale:"
+    Write-Host ""
+    Write-Host "   `"C:\Program Files\Tailscale\tailscale.exe`" serve --bg --https=443 http://localhost:$Port/" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host " It then answers at https://<machine>.<tailnet>.ts.net/ for anyone on"
+    Write-Host " the tailnet, over HTTPS, with no sign-in."
+    Write-Host ""
+    Write-Warn "There is no password on this app. Whoever can reach it can read every"
+    Write-Warn "figure in it, so tailnet membership is the whole of its security."
+    Write-Warn "Use 'serve', NEVER 'funnel' - funnel would publish the farm's figures"
+    Write-Warn "on the open internet. Remove a departed person's device from the"
+    Write-Warn "Tailscale admin console; that is the only way to revoke access."
     Write-Host ""
     Write-Host " The server will now start automatically every time this PC turns on."
     Write-Host " update_owner_server.bat installs the newest SIGNED release and restarts it."

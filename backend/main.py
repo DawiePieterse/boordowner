@@ -1,10 +1,14 @@
 """The Boord Owner service.
 
 One `uvicorn main:app` process, run beside Boord on the farm server. Serves
-the four-tab frontend, authenticates Owner-app users against its own
-data/owner.db, and returns the figures the Boord Admin Dashboard shows (minus
-wages) plus the Analysis / Weather / Risk tabs - reading Boord's
+the four-tab frontend and returns the figures the Boord Admin Dashboard shows
+(minus wages) plus the Analysis / Weather / Risk tabs - reading Boord's
 data/boord.db read-only.
+
+There is no sign-in. Every endpoint here answers anyone who can reach the
+port, and the installer binds it to 127.0.0.1 so that "anyone" means the
+tailnet `tailscale serve` publishes it to. Read README.md's Access section
+before changing how this is served.
 """
 import os
 
@@ -14,9 +18,9 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 import config
-from db import boord_engine, init_owner_db, seed_default_manager
-from routers import (analysis, auth, boord_data, dashboard, historical,
-                     historical_report, risk, users, weather)
+from db import boord_engine, init_owner_db
+from routers import (analysis, boord_data, dashboard, historical,
+                     historical_report, risk, weather)
 
 app = FastAPI(title="Boord Owner")
 
@@ -27,7 +31,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for module in (auth, users, dashboard, boord_data, analysis, risk, weather,
+for module in (dashboard, boord_data, analysis, risk, weather,
                historical, historical_report):
     app.include_router(module.router)
 
@@ -80,7 +84,6 @@ def on_startup():
         conn.execute(text("SELECT 1"))       # fail fast if unreadable / query_only can't be set
         _assert_boord_schema(conn)
     init_owner_db()
-    seed_default_manager()
 
 
 class NoCacheStaticFiles(StaticFiles):

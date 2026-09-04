@@ -8,7 +8,6 @@ from sqlmodel import Session, delete, select
 from db import get_boord_session, get_owner_session, weather_append_lock
 from models_owner import WeatherHistory
 from routers.historical import earliest_history_season
-from security import get_current_manager, get_current_user
 from weather import (ARCHIVE_START_DATE, HISTORY_START_DATE, different_location, farm_coords,
                       farm_coords_and_release, fetch_hourly_range, fetch_weather_cached,
                       foreign_row_count, sync_recent_weather)
@@ -17,7 +16,7 @@ router = APIRouter(prefix="/api/weather", tags=["weather"])
 
 
 @router.get("/current")
-def current_weather(boord: Session = Depends(get_boord_session), user=Depends(get_current_user)):
+def current_weather(boord: Session = Depends(get_boord_session)):
     """Live conditions at the farm, for the header strip.
 
     Cached (fetch_weather_cached, ~10 min TTL) rather than fetched fresh: the
@@ -171,8 +170,7 @@ def weather_history(years: Optional[str] = Query(
                         None, description="Comma-separated calendar years to chart, "
                                           "e.g. 2024,2025. Defaults to the most recent."),
                     owner: Session = Depends(get_owner_session),
-                    boord: Session = Depends(get_boord_session),
-                    user=Depends(get_current_user)):
+                    boord: Session = Depends(get_boord_session)):
     """Weather tab data - syncs the latest hours from Open-Meteo first
     (best-effort, see weather.sync_recent_weather) then returns the daily
     aggregate for the requested years.
@@ -194,8 +192,7 @@ def weather_history(years: Optional[str] = Query(
 @router.post("/history/backfill")
 def backfill_weather_history(years: Optional[int] = Query(None, ge=1, le=200),
                               owner: Session = Depends(get_owner_session),
-                              boord: Session = Depends(get_boord_session),
-                              mgr=Depends(get_current_manager)):
+                              boord: Session = Depends(get_boord_session)):
     """Pull the weather record for the farm's location, `years` back to today.
 
     Same job as scripts/import_historical_weather.py and its 1987-2019

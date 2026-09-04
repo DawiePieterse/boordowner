@@ -1,7 +1,7 @@
 # Boord Owner — Guide
 
-A read-only way to check on harvest progress: your own sign-in, on any
-device, showing the season's figures and nothing you could break.
+A read-only way to check on harvest progress: open a link on any device
+and see the season's figures, with nothing you could break.
 
 ---
 
@@ -18,60 +18,27 @@ This works from anywhere — home, the office, the orchard — provided
 **Tailscale** is connected on the device you're using (see below). Your
 browser will show a padlock, and the connection is encrypted the whole way.
 
-**On the farm's own Wi-Fi**, this address also works and needs no
-Tailscale at all:
+**There is no sign-in.** The link opens straight onto the Dashboard.
+**Worth bookmarking**, or adding to your home screen, so it's one tap next
+time.
 
-```
-http://192.168.68.114:8010/
-```
+### Tailscale is what keeps this private
 
-Sign in with **your own username and password**. **Worth bookmarking**
-whichever one you use, or adding it to your home screen, so it's one tap
-next time.
+Because there's no password, the app is protected entirely by *who can
+reach it* — and that is Tailscale's job. You'll need it installed and
+connected on whatever device you use; ask the farm office to set this up
+for you once, it's a one-time thing.
 
-> Pick one and stick to it. The two addresses are separate as far as your
-> browser is concerned, so signing in on one does not sign you in on the
-> other — you would just be asked for your password twice for no reason.
+Two things follow from that, and they matter:
 
-### The first time you sign in
-
-Whoever set up your account gives you a **one-time password**. It works
-exactly once, for signing in — the app then asks you to choose a password
-of your own before it will show you anything. Pick something only you
-know; nobody else needs it, and a manager can always issue you a fresh
-one-time password if you forget it.
-
-If you were the person who installed the app, the server printed a
-password for the `admin` account when it first started. Same rule: it is
-good for one sign-in, and you replace it immediately.
-
-### If you're checking this from off the farm
-
-You'll need **Tailscale** installed and connected on whatever device you
-use — ask the farm office to set this up for you once; it's a one-time
-thing. Your password proves who *you* are, but reaching the farm's server
-from outside its own network needs Tailscale regardless. The two aren't
-the same thing, and neither replaces the other.
-
-If Tailscale isn't connected, the page simply won't load — it won't ask
-for a password and fail, it won't load at all. That's the usual cause of
-"the link is broken."
-
-If you're always on the farm's own Wi-Fi when you check, you can skip
-Tailscale and use the `192.168.68.114` address above.
-
-### If you're signed out unexpectedly
-
-Sessions last 30 days, so you shouldn't have to sign in often. Being
-asked again sooner than that means one of a few things, all of them
-deliberate: your password was changed (by you, on another device, or
-reset for you by a manager), or your account was disabled. Changing a
-password ends every other session it was signed into — which is exactly
-what you want if you ever think somebody else has it.
-
-The innocent explanation is that you've opened the *other* address. Your
-browser treats the Tailscale one and the farm Wi-Fi one as two different
-places and keeps a separate sign-in for each.
+- **If Tailscale isn't connected, the page won't load at all.** It won't
+  ask you for anything and fail — nothing appears. That's the usual cause
+  of "the link is broken."
+- **Anyone who can open the link sees everything.** There's no password
+  in front of the farm's figures, so treat a device that's connected to
+  the farm's Tailscale the way you'd treat an unlocked filing cabinet.
+  If a phone or laptop with Tailscale on it is lost or sold, tell the farm
+  office so they can remove it — that is the only way to cut off access.
 
 ---
 
@@ -91,9 +58,6 @@ The Dashboard is the day-to-day view; the other three are the
 season-level ones. **Analysis, Weather and Risk live in this app only** —
 the farm office's own Boord app doesn't have them, so this is the place
 they're looked at.
-
-If you're a manager you'll see a fifth tab, **Users** — see
-"Managing who can sign in" at the end of this guide.
 
 Everything here is read-only. Nothing you tap in this app changes a
 figure in Boord; the numbers are Boord's, shown as they stand.
@@ -293,15 +257,6 @@ directly.
 
 ## If something looks wrong
 
-- **You're sent back to the sign-in screen** — this is about your
-  account, not your connection. Either your password was changed
-  somewhere (which ends every other session, deliberately), or your
-  account was disabled. Ask a manager to reset you a fresh one-time
-  password.
-- **"Incorrect username or password"** — check for a stray space if you
-  pasted a one-time password. A one-time password also only works
-  *once*: if you already signed in with it and chose your own, that new
-  one is the one to use.
 - **An amber bar says you're offline** — this one *is* the connection.
   The page shows the last figures it saved for whatever date range/farm
   is selected, labeled with how old they are (e.g. *"Offline - showing
@@ -321,44 +276,7 @@ directly.
   figures rather than an empty screen. If the rest of the page is fine,
   the farm's server is fine.
 - **Nothing loads at all, and you're off the farm** — check that
-  **Tailscale** is open and shows **"Connected"** first (see "If you're
-  checking this from off the farm" above) - this is the most common
-  cause. If Tailscale is connected and it still won't load, check your
-  own internet connection, then let the farm office know if it persists.
-
----
-
-## Managing who can sign in
-
-Only **managers** see the **Users** tab. If yours doesn't have one, this
-section isn't for you — ask whoever set the app up.
-
-Everyone in this list can sign in and see the same figures; being a
-manager adds nothing to what you *see*, only the right to manage the
-list itself.
-
-- **Add user** — type a username and press Add. The app shows a
-  **one-time password**, once. Copy it there and then and pass it to the
-  person; it can't be shown again. They sign in with it and immediately
-  choose their own. Tick **Manager** if they should be able to manage
-  this list too.
-- **Reset password** — for somebody who's forgotten theirs. Same
-  one-time password, shown once. Resetting also signs that account out
-  everywhere, straight away.
-- **Disable** — for somebody who has left. Their account stops working
-  on their very next tap, not whenever their session would have run out.
-  It's kept, so the list still records who once had access, and **Enable**
-  brings them back if they return.
-- **Delete** — removes the account outright, with no record that it
-  existed. Use this for a mistake — a typo'd username, somebody added who
-  shouldn't have been. For a person who genuinely had access and has since
-  left, **Disable is the better choice**: it stops them just as
-  immediately, and leaves you able to answer "who could see this?" later.
-- **Make manager / Make viewer** — promote or demote somebody.
-
-**There must always be at least one enabled manager.** The app refuses
-any change that would leave none — disabling the last one, demoting them,
-or deleting them — because there would then be nobody able to restore
-access to anybody, including themselves. If you're the only manager, add a
-second one before you change your own account. You also cannot delete the
-account you are signed in as.
+  **Tailscale** is open and shows **"Connected"** first (see "Tailscale is
+  what keeps this private" above) - this is the most common cause. If
+  Tailscale is connected and it still won't load, check your own internet
+  connection, then let the farm office know if it persists.

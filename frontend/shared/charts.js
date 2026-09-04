@@ -26,6 +26,27 @@ const LWCharts = (() => {
     return step * mag;
   }
 
+  // Nice rounded bounds for an axis that does NOT start at zero, unlike
+  // niceMax() - a temperature or humidity line reads better bracketing its
+  // own range than squashed up against a 0 baseline it never goes near.
+  // Bounds are floored/ceiled to a 1/2/5x10^n step sized so `steps`
+  // intervals cover the data.
+  function niceRange(min, max, steps = 4) {
+    if (!isFinite(min) || !isFinite(max)) return { min: 0, max: 1, step: 1 / steps };
+    if (max === min) {
+      // A flat series (one point, or a day-long constant) - pad outwards
+      // rather than hand back a zero-width domain to divide by.
+      const pad = Math.abs(max) * 0.05 || 1;
+      min -= pad;
+      max += pad;
+    }
+    const raw = (max - min) / steps;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const norm = raw / mag;
+    const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+    return { min: Math.floor(min / step) * step, max: Math.ceil(max / step) * step, step };
+  }
+
   function emptyState(container, msg = "No data for this period") {
     container.innerHTML = `<div class="text-sm text-slate-400 p-8 text-center">${msg}</div>`;
   }
@@ -103,42 +124,87 @@ const LWCharts = (() => {
     container.appendChild(root);
   }
 
-  // Like lineChart(), but each series is scaled independently to fill
-  // 0%(its own min)-100%(its own max) of the chart height, rather than
-  // sharing one literal y-axis - lets wildly different-scale metrics (e.g.
-  // temp in °C vs. sunshine duration in seconds) overlay for shape/timing
-  // comparison without one metric flattening the others. There is
-  // therefore no single "correct" unit for a y-axis label once several
-  // series are combined, so this draws no gridline value labels - only the
-  // x-axis. Real per-point values surface on hover instead: a <path> can
-  // only carry one <title> for its whole length (see lineChart()), so
-  // real values live on small circle markers plotted every `pointEvery`-th
-  // point (plus always the last point), each with its own <title>.
-  // series: [{label, color, unit, decimals, points:[{x,y}], emphasize, muted}]
-  function normalizedLineChart(container, { series, xLabel = (x) => x, height = 260, minWidthPerPoint = 3,
-                                              xMin: xMinOverride, xMax: xMaxOverride, pointEvery = 1 }) {
+  // Like lineChart(), but with TWO independent y-axes: every series carries
+  // `axis` (0 = left, 1 = right), and each axis is scaled across all of its
+  // own series - so two measurements in wildly different units (temperature
+  // in °C against wind speed in km/h) can share one plot and still each be
+  // read off a real, labelled axis.
+  //
+  // This was normalizedLineChart(), which scaled every series separately to
+  // fill 0%(its own min)-100%(its own max) of the height and so could draw
+  // no y-axis at all: with any number of unrelated units on one chart there
+  // was no honest axis to draw, and real values only surfaced on hover. The
+  // cost was that nothing on the chart had a readable magnitude, and two
+  // years of the SAME measurement were not comparable either - each was
+  // stretched to the full height on its own, so a hot year and a cold year
+  // looked identical. Capping the caller at two measurements is what buys
+  // the axes back.
+  //
+  // Per-point values still surface on hover as well: a <path> can only carry
+  // one <title> for its whole length (see lineChart()), so markers are
+  // plotted every `pointEvery`-th point (plus always the last one), each
+  // with its own <title>.
+  // series: [{label, color, unit, decimals, axis, points:[{x,y}], emphasize, muted}]
+  // axisLabels: [{label, unit, decimals, color}, ...], indexed by axis - the
+  // rotated title beside each axis, and the unit/decimals its tick values are
+  // formatted with. An axis with no series on it is not drawn at all (Soil
+  // Temp and UV Index have no rows before 2020, so a ticked measurement can
+  // legitimately produce nothing to plot).
+  function dualAxisLineChart(container, { series, xLabel = (x) => x, height = 260, minWidthPerPoint = 3,
+                                           xMin: xMinOverride, xMax: xMaxOverride, pointEvery = 1,
+                                           axisLabels = [] }) {
     const withPoints = series.filter((s) => s.points && s.points.length);
     if (!withPoints.length) return emptyState(container);
     const allX = withPoints.flatMap((s) => s.points.map((p) => p.x));
     const xMin = xMinOverride != null ? Math.min(xMinOverride, ...allX) : Math.min(...allX);
     const xMax = xMaxOverride != null ? Math.max(xMaxOverride, ...allX) : Math.max(...allX);
-    const padL = 20, padB = 26, padT = 12, padR = 16;
+
+    // One domain per axis, taken over every series on that axis rather than
+    // per series - which is what makes the axis mean something and the years
+    // drawn against it comparable to each other.
+    const Y_STEPS = 4;
+    const domains = [];
+    [0, 1].forEach((axis) => {
+      const ys = withPoints.filter((s) => (s.axis || 0) === axis).flatMap((s) => s.points.map((p) => p.y));
+      domains[axis] = ys.length ? niceRange(Math.min(...ys), Math.max(...ys), Y_STEPS) : null;
+    });
+    const hasRight = !!domains[1];
+
+    const padL = 76, padB = 26, padT = 12, padR = hasRight ? 76 : 16;
     const width = Math.max(420, Math.min(1600, (xMax - xMin + 1) * minWidthPerPoint + padL + padR));
     const w = width - padL - padR, h = height - padT - padB;
     const sx = (x) => padL + (xMax > xMin ? ((x - xMin) / (xMax - xMin)) * w : w / 2);
-
-    withPoints.forEach((s) => {
-      const ys = s.points.map((p) => p.y);
-      s._min = Math.min(...ys);
-      s._max = Math.max(...ys);
-    });
-    const sy = (s, y) => padT + h - (s._max > s._min ? (y - s._min) / (s._max - s._min) : 0.5) * h;
+    const sy = (axis, y) => {
+      const d = domains[axis] || domains[0];
+      return padT + h - ((y - d.min) / (d.max - d.min)) * h;
+    };
 
     const children = [];
-    for (let i = 0; i <= 4; i++) {
-      const y = padT + (h / 4) * i;
+    for (let i = 0; i <= Y_STEPS; i++) {
+      const y = padT + (h / Y_STEPS) * i;
       children.push(svg("line", { x1: padL, x2: padL + w, y1: y, y2: y, stroke: "#e2e8f0", "stroke-width": 1 }));
+      [0, 1].forEach((axis) => {
+        const d = domains[axis];
+        if (!d) return;
+        const meta = axisLabels[axis] || {};
+        const val = d.max - ((d.max - d.min) / Y_STEPS) * i;
+        children.push(text(axis === 0 ? padL - 8 : padL + w + 8, y + 4,
+                            `${val.toFixed(meta.decimals ?? 1)}${meta.unit || ""}`,
+                            { "text-anchor": axis === 0 ? "end" : "start", fill: "#94a3b8",
+                              style: "font-size:10px" }));
+      });
     }
+    // Rotated axis titles, each in the colour of the lines it belongs to, so
+    // which side a measurement is read against needs no working out.
+    [0, 1].forEach((axis) => {
+      const meta = axisLabels[axis];
+      if (!domains[axis] || !meta || !meta.label) return;
+      const tx = axis === 0 ? 12 : width - 12;
+      const ty = padT + h / 2;
+      children.push(text(tx, ty, meta.unit ? `${meta.label} (${meta.unit})` : meta.label,
+                          { "text-anchor": "middle", fill: meta.color || "#64748b",
+                            style: "font-size:11px;font-weight:600", transform: `rotate(-90 ${tx} ${ty})` }));
+    });
     const labelCount = Math.min(8, Math.max(1, xMax - xMin));
     for (let i = 0; i <= labelCount; i++) {
       const x = xMin + Math.round(((xMax - xMin) * i) / labelCount);
@@ -146,14 +212,15 @@ const LWCharts = (() => {
     }
 
     withPoints.forEach((s) => {
-      const d = s.points.map((p, i) => `${i === 0 ? "M" : "L"}${sx(p.x).toFixed(1)},${sy(s, p.y).toFixed(1)}`).join(" ");
+      const axis = (s.axis || 0);
+      const d = s.points.map((p, i) => `${i === 0 ? "M" : "L"}${sx(p.x).toFixed(1)},${sy(axis, p.y).toFixed(1)}`).join(" ");
       children.push(svg("path", { d, fill: "none", stroke: s.color, "stroke-width": s.emphasize ? 3 : 1.5,
                                    opacity: s.muted ? 0.5 : 1 }));
       s.points.forEach((p, i) => {
         if (i % pointEvery !== 0 && i !== s.points.length - 1) return;
         const titleEl = svg("title");
         titleEl.textContent = `${s.label}: ${p.y.toFixed(s.decimals ?? 1)}${s.unit || ""} (${xLabel(p.x)})`;
-        children.push(svg("circle", { cx: sx(p.x), cy: sy(s, p.y), r: 2.5, fill: s.color,
+        children.push(svg("circle", { cx: sx(p.x), cy: sy(axis, p.y), r: 2.5, fill: s.color,
                                        opacity: s.muted ? 0.5 : 0.9 }, [titleEl]));
       });
     });
@@ -500,5 +567,5 @@ const LWCharts = (() => {
     pdf.save(filename);
   }
 
-  return { lineChart, normalizedLineChart, barChart, stackedBarChart, heatmap, bubbleMatrix, rangeBarChart, legend, exportPDF, PALETTE };
+  return { lineChart, dualAxisLineChart, barChart, stackedBarChart, heatmap, bubbleMatrix, rangeBarChart, legend, exportPDF, PALETTE };
 })();

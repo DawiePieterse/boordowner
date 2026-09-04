@@ -52,7 +52,13 @@ already stored; it just won't be topped up.
 
 ### The measurements
 
-Tick as many as you like along the top:
+Tick **up to two** along the top. Two is the limit because each one is
+drawn against a real y-axis of its own — the first measurement you tick is
+read off the **left-hand** axis, the second off the **right-hand** one, each
+labelled in its own unit and coloured to match its lines. Once two are
+ticked the rest grey out; untick one to free a slot.
+
+The measurements themselves:
 
 | Measurement | What the daily figure is |
 |---|---|

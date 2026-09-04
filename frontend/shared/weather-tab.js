@@ -10,6 +10,12 @@
 // screen-agnostic shape (the caller supplies the fetch) because that is
 // still the cleaner seam, not because anything else renders it.
 //
+// At most two measurements are charted at once (MAX_METRICS): each gets a
+// real y-axis of its own, the first on the left and the second on the
+// right. Any more than two and there is no honest axis left to draw them
+// against - which is how this chart used to work, with every line scaled to
+// its own min/max and no axis at all (see charts.js's dualAxisLineChart).
+//
 // Years are always overlaid on a shared 1 Jan - 31 Dec x-axis, one line per
 // selected year, defaulting to the most recent year on file. There used to
 // be an "All Years" mode plotting one continuous line across the whole
@@ -17,6 +23,9 @@
 // where it compressed 39 years into an unreadable smear and buried the
 // year-on-year comparison this tab exists for.
 const LWWeatherTab = (() => {
+  // Two measurements, two y-axes - see the header comment.
+  const MAX_METRICS = 2;
+
   let _data = null;
   let _bound = false;
   let _firstLoad = true;
@@ -45,7 +54,15 @@ const LWWeatherTab = (() => {
         if (e.target.checked) _selectedYears.add(year); else _selectedYears.delete(year);
         if (_data) _ensureYearsThenRender();
       } else if (e.target.classList.contains("weather-metric-cb")) {
+        // The cap is normally enforced by disabling the unticked boxes
+        // below; this is the backstop for a tick that gets through anyway
+        // (a keyboard activation racing the re-sync, say).
+        if (e.target.checked && _selectedMetrics.size >= MAX_METRICS) {
+          e.target.checked = false;
+          return;
+        }
         if (e.target.checked) _selectedMetrics.add(e.target.value); else _selectedMetrics.delete(e.target.value);
+        _syncMetricCheckboxes();
         if (_data) _render();
       }
     });
@@ -127,6 +144,19 @@ const LWWeatherTab = (() => {
     });
   }
 
+  // Grey out whatever is not already ticked once the cap is reached, so the
+  // limit shows itself rather than silently swallowing a click - and untick
+  // nothing on the user's behalf.
+  function _syncMetricCheckboxes() {
+    const full = _selectedMetrics.size >= MAX_METRICS;
+    document.querySelectorAll(".weather-metric-cb").forEach((cb) => {
+      const disabled = full && !cb.checked;
+      cb.disabled = disabled;
+      const label = cb.closest("label");
+      if (label) label.classList.toggle("text-slate-300", disabled);
+    });
+  }
+
   function _renderLoading(years) {
     const chartEl = document.getElementById("weatherChart");
     if (chartEl) {
@@ -198,7 +228,7 @@ const LWWeatherTab = (() => {
       if (!_selectedYears.size) {
         _selectedYears = new Set([data.years.length ? data.years[data.years.length - 1] : data.current_year]);
       }
-      _selectedMetrics = new Set(["temp_c"]);
+      _selectedMetrics = new Set(["temp_c"]);   // at most MAX_METRICS of them
     }
 
     // Rebuilt only when the set of years/metrics actually changes (mirrors
@@ -225,6 +255,7 @@ const LWWeatherTab = (() => {
         </label>`).join("");
       metricEl.dataset.metrics = metricsSig;
     }
+    _syncMetricCheckboxes();
     _firstLoad = false;
   }
 
@@ -299,13 +330,13 @@ const LWWeatherTab = (() => {
     _data.metrics.forEach((m, i) => { hueOfMetric[m.key] = i; });
 
     const years = _data.years.filter((y) => _selectedYears.has(y));
-    // One measurement on the chart: hue per year. Several: hue per
+    // One measurement on the chart: hue per year. Two: hue per
     // measurement, shade per year. Past eight years in the single-metric
     // case the hues start over at the next shade in SHADE_CYCLE, so even
     // ticking the whole 1987-present record never repeats a color.
     const hueByYear = metricKeys.length === 1;
     const series = [];
-    metricKeys.forEach((key) => {
+    metricKeys.forEach((key, mi) => {
       const m = metricsByKey[key];
       years.forEach((year, yi) => {
         const points = (_pointsByYear[year] || [])
@@ -319,7 +350,7 @@ const LWWeatherTab = (() => {
           : _shadeIndex(yi, years.length);
         const color = family[shade];
         series.push({
-          label: `${m.label} — ${year}`, color,
+          label: `${m.label} — ${year}`, color, axis: mi,
           unit: m.unit, decimals: m.decimals, points, emphasize: isCurrent,
         });
       });
@@ -333,7 +364,20 @@ const LWWeatherTab = (() => {
 
     const pointEvery = Math.max(1, Math.ceil(Math.max(1, ...series.map((s) => s.points.length)) / 150));
 
-    LWCharts.normalizedLineChart(chartEl, { series, xLabel: _dayOfYearLabel, xMin: 1, pointEvery });
+    // The axis title takes the measurement's own colour when there is one -
+    // with two measurements up, every line of a measurement shares a hue
+    // family, so shade 2 (the strong mid tone) reads as "these lines". In
+    // the single-measurement case the hue varies per year instead and no one
+    // colour speaks for the axis, so it stays slate.
+    const axisLabels = metricKeys.map((key) => {
+      const m = metricsByKey[key];
+      return {
+        label: m.label, unit: m.unit, decimals: m.decimals,
+        color: hueByYear ? "#64748b" : HUE_FAMILIES[hueOfMetric[key] % HUE_FAMILIES.length][2],
+      };
+    });
+
+    LWCharts.dualAxisLineChart(chartEl, { series, xLabel: _dayOfYearLabel, xMin: 1, pointEvery, axisLabels });
     LWCharts.legend(legendEl, series.map((s) => ({ label: s.label, color: s.color })));
   }
 

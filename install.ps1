@@ -319,18 +319,21 @@ set "BOORD_DB_PATH=$boordDb"
             Write-Host " Boord on this PC already trusts this key. Same publisher, same"
             Write-Host " key - so in this folder, run:"
             Write-Host ""
-            Write-Host "     echo $boordFpr> data\release_key.fpr" -ForegroundColor Cyan
+            Write-Host "     >data\release_key.fpr echo $boordFpr" -ForegroundColor Cyan
         } else {
             Write-Host " In this folder, run:"
             Write-Host ""
-            Write-Host "     echo <FINGERPRINT>> data\release_key.fpr" -ForegroundColor Cyan
+            Write-Host "     >data\release_key.fpr echo <FINGERPRINT>" -ForegroundColor Cyan
             Write-Host ""
             Write-Host " ...with the 40-character fingerprint from whoever maintains this"
             Write-Host " install."
         }
         Write-Host ""
-        Write-Warn "Note there is NO space before the > - echo would write one into the"
-        Write-Warn "file, and the fingerprint would then never match."
+        Write-Warn "Type it with the redirect first, exactly as shown. cmd reads a digit"
+        Write-Warn "written immediately before a > as a file handle number, so the more"
+        Write-Warn "natural 'echo <FINGERPRINT>> file' drops the fingerprint's last"
+        Write-Warn "character whenever it is a digit - and the next update then fails its"
+        Write-Warn "signature check, which reads as tampering rather than as a typo."
     } else {
         $fpr = (Get-Content $FprFile -TotalCount 1).Trim()
         Write-Ok "Release key fingerprint on file: $fpr"

@@ -230,6 +230,18 @@ const LWRiskTab = (() => {
     return parts.join(" + ");
   }
 
+  // A factor is "locked in" once no part of its window is still assumed:
+  // every day of it is real measured data or a real forecast, so all three
+  // scenarios necessarily land on the same value. Dimming those rows keeps
+  // three identical numbers from reading as a bug - see LOCKED_IN_NOTE.
+  function _isLockedIn(d) {
+    return !d.data_gap && !d.assumed_days;
+  }
+
+  const LOCKED_IN_NOTE =
+    "No part of this window is still assumed, so this factor's value is settled " +
+    "for the season and is the same in all three scenarios.";
+
   function _renderForecast(forecast) {
     const cardEl = document.getElementById("harvestForecastCard");
     if (!cardEl) return;
@@ -255,14 +267,21 @@ const LWRiskTab = (() => {
         </div>`;
     }).join("");
 
-    const driverRows = forecast.drivers.map((d) => `
-      <tr class="border-b">
-        <td class="p-2">${d.label}</td>
-        <td class="p-2 text-slate-500 whitespace-nowrap">${_basisText(d)}</td>
-        <td class="p-2">${d.scenarios.favorable.value ?? "-"}</td>
-        <td class="p-2">${d.scenarios.expected.value ?? "-"}</td>
-        <td class="p-2">${d.scenarios.unfavorable.value ?? "-"}</td>
-      </tr>`).join("");
+    const driverRows = forecast.drivers.map((d) => {
+      const locked = _isLockedIn(d);
+      const valueClass = locked ? "p-2 text-slate-400" : "p-2";
+      const lockedTag = locked
+        ? ` <span class="text-slate-400 whitespace-nowrap">&middot; <i class="fa-solid fa-lock text-[10px]"></i> locked in</span>`
+        : "";
+      return `
+      <tr class="border-b"${locked ? ` title="${LOCKED_IN_NOTE}"` : ""}>
+        <td class="p-2${locked ? " text-slate-500" : ""}">${d.label}</td>
+        <td class="p-2 text-slate-500 whitespace-nowrap">${_basisText(d)}${lockedTag}</td>
+        <td class="${valueClass}">${d.scenarios.favorable.value ?? "-"}</td>
+        <td class="${valueClass}">${d.scenarios.expected.value ?? "-"}</td>
+        <td class="${valueClass}">${d.scenarios.unfavorable.value ?? "-"}</td>
+      </tr>`;
+    }).join("");
 
     const horizonNote = forecast.forecast_unavailable
       ? `<div class="text-xs text-amber-700 mb-3"><i class="fa-solid fa-triangle-exclamation"></i> Live weather forecast temporarily unavailable - showing historical-scenario estimates only for the near term too.</div>`
@@ -316,7 +335,10 @@ const LWRiskTab = (() => {
       <li>For whatever part of a factor's time window is still ahead, the forecast uses a real
         weather forecast (up to 15 days out) where available, and the ${forecast.reference_label}
         historical range beyond that - see each factor's "Basis" column for exactly how much of
-        each is actual, forecast, or assumed.</li>
+        each is actual, forecast, or assumed. Once a factor's window has no assumed days left it is
+        marked "locked in" and greyed out: its value is settled for the season, so the same number
+        appears under all three scenarios. As the season runs on, more factors lock in and the three
+        predictions narrow toward one.</li>
       <li>The Unfavorable scenario combines each factor's own worst historical year - four
         different real years, not one real season that was worst on everything at once - so its
         score can land outside anything a real season reached. Predictions are held to the best and

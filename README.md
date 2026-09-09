@@ -149,13 +149,33 @@ day, and its Field QR scanner only works on an HTTPS origin, so a device
 pointed at the bare `https://<machine>.<tailnet>.ts.net/` has to land on
 Boord.
 
+That farm server now runs up to four of these apps, and each has its own
+port:
+
+| App | Tailscale port | Proxies to |
+| --- | --- | --- |
+| Boord | 443 | `localhost:8000` |
+| Boord Owner (this app) | 8443 | `localhost:8010` |
+| Boord Notes | 9443 | `localhost:8020` |
+| Kudde | 8030 | `localhost:8030` |
+
 ```bat
 tailscale serve reset
 tailscale serve --bg --https=443  http://localhost:8000
 tailscale serve --bg --https=8443 http://localhost:8010
+tailscale serve --bg --https=9443 http://localhost:8020
+tailscale serve --bg --https=8030 http://localhost:8030
 ```
 
-`tailscale serve status` should then list both.
+`tailscale serve status` should then list every app this PC actually runs.
+
+> **`tailscale serve reset` clears every mapping on the machine, including
+> ones this file does not mention.** Run the whole block and drop only the
+> lines for apps this PC genuinely does not have. This block listed two apps
+> until 2026-09-09, so a machine set up from the older version of it — or
+> from Boord's or Boord Notes' equally short copy — has had Notes and Kudde
+> silently unpublished. The symptom is the `{"detail":"Not Found"}` one
+> below, which is why it is worth checking rather than assuming.
 
 **The symptom of getting it wrong does not look like a port conflict.** The
 address loads and answers `{"detail":"Not Found"}` — that is the *other*

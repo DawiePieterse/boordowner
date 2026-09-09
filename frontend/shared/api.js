@@ -8,7 +8,7 @@ const API_BASE = "";
 const Boord = {
   // Bump on every deploy that touches frontend code. Shown in the header so
   // it's obvious whether a device's cached copy is up to date.
-  VERSION: "1.5.1",
+  VERSION: "1.5.2",
 
   getLastReceivedBy() { return localStorage.getItem("boord_last_received_by") || ""; },
   setLastReceivedBy(name) { localStorage.setItem("boord_last_received_by", name); },

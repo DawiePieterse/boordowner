@@ -100,7 +100,17 @@ echo.
 echo ==^> Fetching signed releases from GitHub...
 :: --force so a retagged release is picked up rather than silently keeping
 :: the stale local tag. It still has to pass the signature check below.
-git fetch --tags --force origin
+::
+:: -c gc.auto=0: a plain fetch triggers git's automatic gc, whose prune step
+:: on Windows tries to rmdir the now-empty .git\objects\XX folders. While
+:: Defender, the search indexer or a backup agent is mid-scan of .git it
+:: holds a handle on one, the rmdir gets "access denied", and Git for
+:: Windows stops to ask "Deletion of directory '.git/objects/00' failed.
+:: Should I try again? ^(y/n^)" - hanging this window with nobody to answer.
+:: This script only needs the refs; it has no business repacking a farm's
+:: repo, so turn that gc off for the fetch. Cleaning loose objects is a
+:: deliberate, server-stopped maintenance job, not an update side effect.
+git -c gc.auto=0 fetch --tags --force origin
 if %errorLevel% neq 0 (
     echo.
     echo Fetch failed - check the error above ^(no internet, or this folder

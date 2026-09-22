@@ -258,12 +258,23 @@ const LWRiskTab = (() => {
       const color = BAND_COLORS[s.band] || "#64748b";
       const avgLabel = forecast.regression_label ? `${forecast.regression_label} avg` : "historical avg";
       const pctText = s.vs_avg_pct == null ? "" : `${s.vs_avg_pct > 0 ? "+" : ""}${s.vs_avg_pct}% vs ${avgLabel}`;
+      // Actual recent pace (last 7 days' real harvested kg), shown only
+      // under Expected - the three cards share one season-long weather
+      // projection, so one sparkline of what's actually being picked right
+      // now is enough context for all three, not a fourth number to repeat.
+      const sparklineBlock = key === "expected" && forecast.last_7_days_kg && forecast.last_7_days_kg.length
+        ? `<div class="mt-2 pt-2 border-t border-slate-100">
+            <div class="text-[10px] text-slate-400 uppercase tracking-wide">Last 7 days (actual)</div>
+            <div id="expectedKgSparkline" class="mt-1"></div>
+          </div>`
+        : "";
       return `
         <div class="border border-slate-200 rounded-lg p-3 text-center">
           <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide">${SCENARIO_LABELS[key]}</div>
           <div class="text-2xl font-bold mt-1">${Math.round(s.predicted_kg).toLocaleString()} kg</div>
           <div class="text-xs mt-1 font-medium" style="color:${color}">${s.band} Risk (${s.risk_score})</div>
           <div class="text-xs text-slate-400 mt-0.5">${pctText}</div>
+          ${sparklineBlock}
         </div>`;
     }).join("");
 
@@ -301,6 +312,17 @@ const LWRiskTab = (() => {
           <tbody>${driverRows}</tbody>
         </table>
       </div>`;
+
+    const sparkEl = document.getElementById("expectedKgSparkline");
+    if (sparkEl && forecast.last_7_days_kg && forecast.last_7_days_kg.length) {
+      const points = forecast.last_7_days_kg.map((day) => ({
+        x: day.date, y: day.kg,
+        label: `${new Date(`${day.date}T00:00:00`).toLocaleDateString(undefined,
+          { weekday: "short", month: "short", day: "numeric" })}: ${day.kg.toLocaleString()} kg`,
+      }));
+      const expectedBand = forecast.scenarios.expected && forecast.scenarios.expected.band;
+      LWCharts.sparkline(sparkEl, points, { color: BAND_COLORS[expectedBand] || "#0A2F6B" });
+    }
   }
 
   function _renderMethodology(data, forecast) {

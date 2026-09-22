@@ -164,6 +164,49 @@ def test_analysis_excludes_another_growers_blocks(client):
         "the Dashboard is the pack house's and still shows every supplier"
 
 
+def test_last_7_days_kg_is_own_farm_and_net_of_deductions(client):
+    """routers/risk.py's _last_7_days_kg() - the Harvest Forecast card's
+    sparkline data. Own blocks only (same rule as Analysis, not the
+    Dashboard's - see test_analysis_excludes_another_growers_blocks above),
+    net of deductions, and always 7 points even for a day with no picking."""
+    from datetime import date, datetime, timedelta
+
+    from sqlalchemy import create_engine
+    from sqlmodel import Session
+
+    import config
+    from db import boord_engine
+    from models_boord import HarvestRecord
+    from routers.risk import _last_7_days_kg
+
+    today = date.today()
+    three_days_ago = today - timedelta(days=3)
+    rw = create_engine(f"sqlite:///{config.BOORD_DB_PATH}")
+    with Session(rw) as s:
+        s.add(HarvestRecord(uuid="recent-own",
+                            timestamp=datetime.combine(three_days_ago, datetime.min.time()) + timedelta(hours=10),
+                            worker_id="001", block_id="7", team_id="A",
+                            weight_kg=20.0, deduction_kg=2.0, lot_id=1))
+        # Same window, the neighbour's own block - must not count towards
+        # this farm's own recent pace.
+        s.add(HarvestRecord(uuid="recent-neighbour",
+                            timestamp=datetime.combine(today, datetime.min.time()) + timedelta(hours=9),
+                            worker_id="002", block_id="90", team_id="B",
+                            weight_kg=999.0, deduction_kg=0.0, lot_id=2))
+        s.commit()
+    rw.dispose()
+
+    with Session(boord_engine) as boord:
+        rows = _last_7_days_kg(boord)
+
+    assert len(rows) == 7
+    assert rows[0]["date"] == (today - timedelta(days=6)).isoformat()
+    assert rows[-1]["date"] == today.isoformat()
+    by_date = {r["date"]: r["kg"] for r in rows}
+    assert by_date[three_days_ago.isoformat()] == 18.0   # 20.0 - 2.0 deduction
+    assert by_date[today.isoformat()] == 0.0             # neighbour's kg excluded
+
+
 # --------------------------------------------------------------------------- #
 # The Historical Harvest Data workbook
 # --------------------------------------------------------------------------- #

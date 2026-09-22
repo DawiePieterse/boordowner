@@ -67,6 +67,62 @@ def test_driver_value_aggregations():
     assert _driver_value(rows, {"field": "sunshine_duration_s", "agg": "sum", "scale": 1 / 3600}) == 36.0
 
 
+# --------------------------------------------------------------------------- #
+# today/station_today: folding the farm's own on-site iWeathar station into
+# TODAY's contribution to the two drivers it can actually improve on
+# (fruit_warmth, sizing_rain - see routers/risk.py's DRIVERS comment).
+# --------------------------------------------------------------------------- #
+def test_driver_value_today_override_rain_replaces_not_adds():
+    def row(ts, **kw):
+        return SimpleNamespace(timestamp=ts, **kw)
+    today = date(2024, 10, 5)
+    rows = [row(datetime(2024, 10, 1, 12), precipitation_mm=5.0),
+            row(datetime(2024, 10, 5, 6), precipitation_mm=2.0),
+            row(datetime(2024, 10, 5, 18), precipitation_mm=3.0)]
+    driver = {"field": "precipitation_mm", "agg": "sum"}
+    # Without the override, today's two modelled hours (2.0 + 3.0) are summed
+    # like any other day.
+    assert _driver_value(rows, driver) == 10.0
+    # With it, today's modelled hours are dropped entirely and the gauge's
+    # real running total substituted in their place - not added on top of
+    # its own 5.0mm, since both describe the same rain.
+    got = _driver_value(rows, driver, today=today, station_today={"rain_today_mm": 8.0})
+    assert got == 13.0  # 5.0 (Oct 1, untouched) + 8.0 (today, from the gauge)
+
+
+def test_driver_value_today_override_temp_takes_the_higher_peak():
+    def row(ts, **kw):
+        return SimpleNamespace(timestamp=ts, **kw)
+    today = date(2024, 10, 5)
+    rows = [row(datetime(2024, 10, 1, 14), temp_c=20.0),
+            row(datetime(2024, 10, 5, 9), temp_c=18.0)]
+    driver = {"field": "temp_c", "agg": "daily_max_mean"}
+    # The station's own running max for today (22.0) beats anything synced
+    # from Open-Meteo so far (18.0), so it wins.
+    got = _driver_value(rows, driver, today=today, station_today={"temp_max_c": 22.0})
+    assert got == (20.0 + 22.0) / 2
+    # A lower station reading never pulls the peak down - both numbers are
+    # running maxima over the SAME still-open day, so the true max-so-far is
+    # whichever is higher, not a replacement.
+    got_lower = _driver_value(rows, driver, today=today, station_today={"temp_max_c": 5.0})
+    assert got_lower == (20.0 + 18.0) / 2
+
+
+def test_driver_value_today_override_needs_the_matching_key():
+    def row(ts, **kw):
+        return SimpleNamespace(timestamp=ts, **kw)
+    today = date(2024, 10, 5)
+    rows = [row(datetime(2024, 10, 5, 12), precipitation_mm=1.0)]
+    # station_today present but missing the one key this driver reads (e.g.
+    # the station answered but its Rainfall Today field didn't parse) - the
+    # override is a no-op, not a crash or a silent zero.
+    assert _driver_value(rows, {"field": "precipitation_mm", "agg": "sum"},
+                         today=today, station_today={}) == 1.0
+    # No station_today at all (unconfigured or unreachable) behaves exactly
+    # as it always has.
+    assert _driver_value(rows, {"field": "precipitation_mm", "agg": "sum"}) == 1.0
+
+
 def test_driver_value_missing_data():
     def row(ts, v):
         return SimpleNamespace(timestamp=ts, temp_c=v)
@@ -163,6 +219,32 @@ def test_project_driver_intensive_vs_extensive():
     got = _project_driver(inten, state, defaultdict(list), 0)
     actual_mean = 10.0 / 24
     assert abs(got["scenarios"]["expected"] - (5 * actual_mean + 5 * 150.0) / 10) < 1e-6
+
+
+def test_project_driver_actual_segment_uses_station_today():
+    """The actual segment always ends at `today` (_segment_days clips it
+    there), so a configured on-site station's reading for today folds into
+    it via the same today/station_today path _driver_value uses directly -
+    see the today-override tests above."""
+    state = {
+        "current_year": 2025, "today": date(2025, 10, 5),
+        "by_date": defaultdict(list),
+        "hist_range": {"sizing_rain": [50.0, 150.0]},
+        "station_today": {"rain_today_mm": 40.0},
+    }
+    for d in range(1, 6):
+        state["by_date"][date(2025, 10, d)].append(
+            SimpleNamespace(timestamp=datetime(2025, 10, d, 12), precipitation_mm=2.0))
+    driver = {"key": "sizing_rain", "window_md": ((10, 1), (10, 10)),
+             "field": "precipitation_mm", "agg": "sum", "direction": "lower_is_worse"}
+    got = _project_driver(driver, state, defaultdict(list), 0)
+    assert got["actual_days"] == 5 and got["assumed_days"] == 5
+    # actual: Oct 1-4 keep their modelled 2.0mm each (8.0mm); Oct 5 (today)
+    # is replaced outright by the station's 40.0mm gauge reading, not added
+    # to its own modelled 2.0mm - 48.0mm total.
+    # assumed: the 5 remaining days at the "expected" scenario's rate
+    # (mean([50, 150]) / 10-day window = 10.0mm/day) = 50.0mm.
+    assert abs(got["scenarios"]["expected"] - (48.0 + 50.0)) < 1e-6
 
 
 def test_project_driver_data_gap_falls_back():

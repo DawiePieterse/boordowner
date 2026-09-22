@@ -5,12 +5,14 @@ from types import SimpleNamespace
 from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
 
-from db import get_boord_session, get_owner_session
-from models_boord import SystemSetting
+import config
+from db import get_boord_session, get_owner_session, own_farm_block_ids
+from models_boord import HarvestRecord, SystemSetting
 from models_owner import HistoricalAnnualYield, WeatherHistory
 from routers.analysis import build_analysis_summary
-from weather import (farm_coords_and_release, fetch_forecast_hourly, parse_hourly_rows,
-                      sync_recent_weather)
+from timeutil import day_bounds, to_local
+from weather import (farm_coords_and_release, fetch_forecast_hourly, fetch_iweathar_current_cached,
+                      parse_hourly_rows, sync_recent_weather)
 
 router = APIRouter(prefix="/api/risk", tags=["risk"])
 
@@ -31,6 +33,13 @@ router = APIRouter(prefix="/api/risk", tags=["risk"])
 # list and scoring to turn the current season's still-open windows into
 # three kg predictions (Favorable/Expected/Unfavorable) instead of a single
 # risk score - see that function's docstring for how.
+#
+# fruit_warmth and sizing_rain are also the two drivers a configured on-site
+# iWeathar station (config.IWEATHAR_STATION_ID) can improve on for TODAY
+# specifically - its real temperature peak and rain-gauge total beat
+# Open-Meteo's for the exact farm, but only for the single day still in
+# progress, since the station keeps no history. See _driver_value's
+# today/station_today parameters.
 # ---------------------------------------------------------------------------
 DRIVERS = [
     {
@@ -156,11 +165,20 @@ def _window_rows(by_date: dict, year: int, window_md, cutoff: date = None) -> li
     return _date_range_rows(by_date, start, end)
 
 
-def _driver_value(rows: list, driver: dict):
+def _driver_value(rows: list, driver: dict, today: date = None, station_today: dict = None):
     """A driver's raw value over `rows`, or None where the underlying data
     is entirely missing. "scale" (optional) is applied after aggregating,
     to report a legible unit - e.g. sunshine is stored in seconds but read
-    as hours."""
+    as hours.
+
+    `today`/`station_today` fold the farm's own on-site iWeathar station
+    (weather.fetch_iweathar_current_cached(), see config.IWEATHAR_STATION_ID)
+    into the two drivers it can actually improve on Open-Meteo for TODAY
+    specifically - never any other day, since the station keeps no history.
+    Both are None from every caller except the current season's in-progress
+    computation (see _compute_driver_state() and _project_driver()), so a
+    farm with no station configured, or a call about a past season, takes
+    this exactly as it always has."""
     field = driver["field"]
     agg = driver["agg"]
     scale = driver.get("scale", 1)
@@ -183,6 +201,15 @@ def _driver_value(rows: list, driver: dict):
         vals = [v for v in (getattr(r, field) for r in rows) if v is not None]
         return scaled(sum(vals) / len(vals)) if vals else None
     if agg == "sum":
+        if (today is not None and station_today and field == "precipitation_mm"
+                and station_today.get("rain_today_mm") is not None):
+            # Open-Meteo's hourly precipitation for today and the station's
+            # rain gauge both describe the SAME running total, not two
+            # rainfalls to add together - drop today's modelled hours from
+            # the sum and substitute the gauge's real total in their place.
+            other_days = sum(v for r, v in ((r, getattr(r, field)) for r in rows)
+                             if v is not None and r.timestamp.date() != today)
+            return scaled(other_days + station_today["rain_today_mm"])
         vals = [v for v in (getattr(r, field) for r in rows) if v is not None]
         return scaled(sum(vals)) if vals else None
     if agg == "daily_max_mean":
@@ -194,8 +221,14 @@ def _driver_value(rows: list, driver: dict):
             v = getattr(r, field)
             if v is not None:
                 per_day[r.timestamp.date()].append(v)
-        peaks = [max(v) for v in per_day.values()]
-        return scaled(sum(peaks) / len(peaks)) if peaks else None
+        peaks = {d: max(vs) for d, vs in per_day.items()}
+        if (today is not None and station_today and field == "temp_c"
+                and station_today.get("temp_max_c") is not None):
+            # Both readings are a running max over the SAME still-open day,
+            # so the true peak so far is simply whichever is higher - not a
+            # replacement, since neither one alone has seen the whole day.
+            peaks[today] = max(peaks.get(today, station_today["temp_max_c"]), station_today["temp_max_c"])
+        return scaled(sum(peaks.values()) / len(peaks)) if peaks else None
     raise ValueError(f"unknown agg {agg}")
 
 
@@ -229,6 +262,14 @@ def _compute_driver_state(boord: Session, owner: Session) -> dict:
 
     `boord` supplies SystemSetting; `owner` supplies HistoricalAnnualYield
     and WeatherHistory. build_analysis_summary needs both."""
+    # Cached (weather.fetch_iweathar_current_cached, ~10 min TTL, shared with
+    # the header strip) rather than fetched fresh - this runs on every Risk
+    # tab load and Harvest Forecast refresh. Empty when no station is
+    # configured or it's unreachable, in which case every driver below
+    # computes exactly as it did before this existed - see _driver_value's
+    # today/station_today parameters.
+    station_today = fetch_iweathar_current_cached(config.IWEATHAR_STATION_ID) if config.IWEATHAR_STATION_ID else {}
+
     settings = boord.exec(select(SystemSetting)).first()
     current_year = settings.current_harvest_year if settings else date.today().year
 
@@ -288,7 +329,10 @@ def _compute_driver_state(boord: Session, owner: Session) -> dict:
                 continue
             cutoff = today if status == "in_progress" else None
             w_rows = _window_rows(by_date, year, d["window_md"], cutoff)
-            value_by_year[d["key"]][year] = _driver_value(w_rows, d)
+            if status == "in_progress":
+                value_by_year[d["key"]][year] = _driver_value(w_rows, d, today=today, station_today=station_today)
+            else:
+                value_by_year[d["key"]][year] = _driver_value(w_rows, d)
 
     # Reference range per driver, for normalizing every season (including
     # the current one) on the same scale.
@@ -302,6 +346,7 @@ def _compute_driver_state(boord: Session, owner: Session) -> dict:
         "current_year": current_year, "historical_years": historical_years, "all_years": all_years,
         "kg_by_year": kg_by_year, "by_date": by_date, "today": today,
         "value_by_year": value_by_year, "status_by_year": status_by_year, "hist_range": hist_range,
+        "station_today": station_today,
     }
 
 
@@ -485,7 +530,10 @@ def _project_driver(d: dict, state: dict, forecast_by_date: dict, horizon: int) 
     forecast_days = _segment_day_count(segs["forecast"])
     assumed_days = _segment_day_count(segs["assumed"])
 
-    actual_value = _driver_value(_date_range_rows(state["by_date"], *segs["actual"]), d) if segs["actual"] else None
+    actual_value = (
+        _driver_value(_date_range_rows(state["by_date"], *segs["actual"]), d,
+                      today=today, station_today=state.get("station_today"))
+        if segs["actual"] else None)
     forecast_value = _driver_value(_date_range_rows(forecast_by_date, *segs["forecast"]), d) if segs["forecast"] else None
 
     data_gap = (actual_days > 0 and actual_value is None) or (forecast_days > 0 and forecast_value is None)
@@ -531,6 +579,32 @@ def _ols_fit(xs: list, ys: list):
     return {"slope": round(slope, 2), "intercept": round(intercept, 1), "r": round(r, 3), "n_seasons": n}
 
 
+def _last_7_days_kg(boord: Session) -> list:
+    """This farm's own net kg per day for the last 7 calendar days (today
+    inclusive), oldest first - the Harvest Forecast card's sparkline of
+    actual recent pace next to its season-long kg prediction. Own blocks
+    only (db.own_farm_block_ids) and net of deductions (weight_kg -
+    deduction_kg), same convention as build_analysis_summary(). A day with
+    no picking is 0.0, not missing, so the sparkline always has 7 points."""
+    own_blocks = own_farm_block_ids(boord)
+    today = date.today()
+    start = today - timedelta(days=6)
+    start_dt, end_dt = day_bounds(start, today)
+    kg_by_day: dict = defaultdict(float)
+    rows = boord.exec(select(HarvestRecord).where(
+        HarvestRecord.timestamp >= start_dt, HarvestRecord.timestamp <= end_dt)).all()
+    for r in rows:
+        if r.block_id not in own_blocks:
+            continue
+        local_ts = to_local(r.timestamp)
+        if local_ts is None:
+            continue
+        kg_by_day[local_ts.date()] += (r.weight_kg - r.deduction_kg)
+    return [{"date": (start + timedelta(days=i)).isoformat(),
+             "kg": round(kg_by_day.get(start + timedelta(days=i), 0.0), 1)}
+            for i in range(7)]
+
+
 def build_harvest_forecast(boord: Session, owner: Session) -> dict:
     """Three kg predictions for the CURRENT season - Favorable/Expected/
     Unfavorable - rather than one falsely-precise number, since most of a
@@ -561,6 +635,12 @@ def build_harvest_forecast(boord: Session, owner: Session) -> dict:
     historical-scenario projection for its whole open window (see
     forecast_unavailable in the return value) rather than the endpoint
     failing outright.
+
+    The return value also carries last_7_days_kg - this farm's own actual
+    picking for the last 7 calendar days (see _last_7_days_kg()), unrelated
+    to the weather-driven scenarios above. It's there for the Expected
+    scenario card's sparkline: a glance at recent real pace next to the
+    season-long kg prediction, not a projection input.
     """
     sync_recent_weather(owner, boord)  # keep "actual" as fresh as the Weather tab would
     state = _compute_driver_state(boord, owner)
@@ -701,6 +781,7 @@ def build_harvest_forecast(boord: Session, owner: Session) -> dict:
         "regression": regression,
         "scenarios": scenarios_out,
         "drivers": driver_data,
+        "last_7_days_kg": _last_7_days_kg(boord),
     }
 
 

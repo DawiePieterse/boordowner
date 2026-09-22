@@ -488,6 +488,45 @@ const LWCharts = (() => {
     container.appendChild(root);
   }
 
+  // A compact inline sparkline - no axes, no legend, just the shape of a
+  // short recent series (e.g. the Harvest Forecast card's last-7-days
+  // actual kg) sitting next to a headline number. points: [{x, y, label}]
+  // in x order; label is what a hover shows (defaults to x).
+  function sparkline(container, points, { color = PALETTE[0], height = 36 } = {}) {
+    if (!points || !points.length) return emptyState(container, "No data");
+    const width = Math.max(points.length * 16, 60);
+    const ys = points.map((p) => p.y);
+    const { min, max } = niceRange(Math.min(...ys), Math.max(...ys), 2);
+    const range = max - min || 1;
+    const stepX = points.length > 1 ? width / (points.length - 1) : 0;
+    const pad = 3;
+    const toY = (y) => height - pad - ((y - min) / range) * (height - pad * 2);
+    const coords = points.map((p, i) => [i * stepX, toY(p.y)]);
+    const pointsAttr = coords.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+
+    const children = [
+      svg("polyline", { points: `0,${height} ${pointsAttr} ${width},${height}`,
+                        fill: color, "fill-opacity": "0.12", stroke: "none" }),
+      svg("polyline", { points: pointsAttr, fill: "none", stroke: color, "stroke-width": "2",
+                        "stroke-linejoin": "round", "stroke-linecap": "round" }),
+    ];
+    // A transparent, wider-than-the-line hit target per point (the line
+    // itself is a thin target to hover) carrying the tooltip, plus a small
+    // filled dot on the most recent point so the sparkline reads as
+    // "leading up to now" rather than an ambiguous trailing line.
+    coords.forEach(([x, y], i) => {
+      const titleEl = svg("title");
+      titleEl.textContent = `${points[i].label ?? points[i].x}: ${points[i].y}`;
+      children.push(svg("circle", { cx: x, cy: y, r: 7, fill: "transparent" }, [titleEl]));
+    });
+    const [lastX, lastY] = coords[coords.length - 1];
+    children.push(svg("circle", { cx: lastX, cy: lastY, r: 2.5, fill: color }));
+
+    container.innerHTML = "";
+    container.appendChild(svg("svg", { viewBox: `0 0 ${width} ${height}`, width: "100%", height,
+                                       preserveAspectRatio: "none" }, children));
+  }
+
   function legend(container, items) {
     // items: [{label, color, dashed}]
     container.innerHTML = items.map((it) => `
@@ -567,5 +606,5 @@ const LWCharts = (() => {
     pdf.save(filename);
   }
 
-  return { lineChart, dualAxisLineChart, barChart, stackedBarChart, heatmap, bubbleMatrix, rangeBarChart, legend, exportPDF, PALETTE };
+  return { lineChart, dualAxisLineChart, barChart, stackedBarChart, heatmap, bubbleMatrix, rangeBarChart, sparkline, legend, exportPDF, PALETTE };
 })();

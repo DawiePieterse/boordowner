@@ -95,7 +95,7 @@ def test_returns_empty_when_the_station_is_unreachable(monkeypatch):
 def test_fetch_weather_is_open_meteo_only_when_no_station_is_configured(monkeypatch):
     monkeypatch.setattr(config, "IWEATHAR_STATION_ID", None)
     calls = []
-    monkeypatch.setattr(weather_module, "fetch_iweathar_current",
+    monkeypatch.setattr(weather_module, "fetch_iweathar_current_cached",
                         lambda *a, **k: calls.append(1) or {})
     monkeypatch.setattr(weather_module, "_fetch_open_meteo_current",
                         lambda lat, lon: {"temp": 19.0, "humidity": 60, "condition": "Clear"})
@@ -106,7 +106,7 @@ def test_fetch_weather_is_open_meteo_only_when_no_station_is_configured(monkeypa
 
 def test_fetch_weather_prefers_the_station_reading(monkeypatch):
     monkeypatch.setattr(config, "IWEATHAR_STATION_ID", "2235")
-    monkeypatch.setattr(weather_module, "fetch_iweathar_current",
+    monkeypatch.setattr(weather_module, "fetch_iweathar_current_cached",
                         lambda *a, **k: {"temp": 20.2, "humidity": 91.0,
                                         "condition": "Heavy Rain", "rain_today_mm": 13.4,
                                         "source": "iweathar"})
@@ -126,7 +126,7 @@ def test_fetch_weather_fills_gaps_from_open_meteo(monkeypatch):
     """The station has no sky sensor, so it never reports a condition when
     it hasn't rained - Open-Meteo is the only source for that field."""
     monkeypatch.setattr(config, "IWEATHAR_STATION_ID", "2235")
-    monkeypatch.setattr(weather_module, "fetch_iweathar_current",
+    monkeypatch.setattr(weather_module, "fetch_iweathar_current_cached",
                         lambda *a, **k: {"temp": 18.0, "humidity": 70.0, "source": "iweathar"})
     monkeypatch.setattr(weather_module, "_fetch_open_meteo_current",
                         lambda lat, lon: {"temp": 17.5, "humidity": 68, "condition": "Partly Cloudy"})
@@ -138,7 +138,7 @@ def test_fetch_weather_fills_gaps_from_open_meteo(monkeypatch):
 
 def test_fetch_weather_falls_back_fully_when_the_station_is_down(monkeypatch):
     monkeypatch.setattr(config, "IWEATHAR_STATION_ID", "2235")
-    monkeypatch.setattr(weather_module, "fetch_iweathar_current", lambda *a, **k: {})
+    monkeypatch.setattr(weather_module, "fetch_iweathar_current_cached", lambda *a, **k: {})
     monkeypatch.setattr(weather_module, "_fetch_open_meteo_current",
                         lambda lat, lon: {"temp": 21.0, "humidity": 50, "condition": "Overcast"})
     result = weather_module.fetch_weather(-25.57, 31.59)
@@ -147,6 +147,6 @@ def test_fetch_weather_falls_back_fully_when_the_station_is_down(monkeypatch):
 
 def test_fetch_weather_returns_empty_when_both_sources_fail(monkeypatch):
     monkeypatch.setattr(config, "IWEATHAR_STATION_ID", "2235")
-    monkeypatch.setattr(weather_module, "fetch_iweathar_current", lambda *a, **k: {})
+    monkeypatch.setattr(weather_module, "fetch_iweathar_current_cached", lambda *a, **k: {})
     monkeypatch.setattr(weather_module, "_fetch_open_meteo_current", lambda lat, lon: {})
     assert weather_module.fetch_weather(-25.57, 31.59) == {}

@@ -135,6 +135,34 @@ def fetch_iweathar_current(station_id: str, timeout: int = 5) -> dict:
         return {}
 
 
+# Same "don't hammer a hobbyist's server every request" reasoning as
+# fetch_weather_cached() below, applied to the station scrape on its own -
+# routers/risk.py reads today's rain/temp extremes from this same cache to
+# correct the in-progress season's still-open driver windows (see
+# routers/risk.py's DRIVERS and _driver_value's today/station_today
+# parameters), so a Risk tab load and a dashboard load share one cached
+# reading instead of each scraping the page separately.
+_STATION_CACHE_TTL_SECONDS = 600
+_STATION_CACHE_TTL_ON_FAILURE_SECONDS = 60
+_station_cache: dict = {}
+_station_cache_lock = threading.Lock()
+
+
+def fetch_iweathar_current_cached(station_id: str) -> dict:
+    now = _time.monotonic()
+    with _station_cache_lock:
+        hit = _station_cache.get(station_id)
+        if hit and now < hit[0]:
+            return hit[1]
+
+    reading = fetch_iweathar_current(station_id)
+
+    ttl = _STATION_CACHE_TTL_SECONDS if reading else _STATION_CACHE_TTL_ON_FAILURE_SECONDS
+    with _station_cache_lock:
+        _station_cache[station_id] = (now + ttl, reading)
+    return reading
+
+
 def fetch_weather(lat: float, lon: float) -> dict:
     """Current conditions for the header strip. Blends the farm's own
     iWeathar station (config.IWEATHAR_STATION_ID - real sensor readings for
@@ -145,7 +173,7 @@ def fetch_weather(lat: float, lon: float) -> dict:
     configured, or one that's unreachable, gets exactly the old
     Open-Meteo-only behaviour.
     """
-    station = fetch_iweathar_current(config.IWEATHAR_STATION_ID) if config.IWEATHAR_STATION_ID else {}
+    station = fetch_iweathar_current_cached(config.IWEATHAR_STATION_ID) if config.IWEATHAR_STATION_ID else {}
     meteo = _fetch_open_meteo_current(lat, lon)
     if not station and not meteo:
         return {}

@@ -32,7 +32,13 @@ async function updateBannerWeather() {
       el.innerHTML = `<i class="fa-solid fa-location-dot"></i> Set pack house location in Settings`;
     } else if (w && w.temp !== undefined && w.temp !== null) {
       const icon = Boord.weatherIcon(w.condition);
-      el.innerHTML = `<i class="fa-solid ${icon}"></i> ${Math.round(w.temp)}°C · ${w.condition}${w.humidity != null ? ` · ${w.humidity}% humidity` : ""}`;
+      const conditionText = w.condition ? ` · ${w.condition}` : "";
+      const humidityText = w.humidity != null ? ` · ${w.humidity}% humidity` : "";
+      // rain_today_mm only comes from the farm's own iWeathar station (see
+      // backend/weather.py) - Open-Meteo's /current call here never returns
+      // it, so its presence is exactly "an on-farm reading exists".
+      const rainText = w.rain_today_mm ? ` · ${w.rain_today_mm}mm today` : "";
+      el.innerHTML = `<i class="fa-solid ${icon}"></i> ${Math.round(w.temp)}°C${conditionText}${humidityText}${rainText}`;
     }
   } catch (e) { /* nice-to-have only */ }
 }

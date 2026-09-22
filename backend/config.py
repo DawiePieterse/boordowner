@@ -31,4 +31,14 @@ BOORD_DB_PATH = os.path.abspath(os.environ.get(
 # binding is not a detail - it is the access control. See README.md.
 OWNER_PORT = int(os.environ.get("OWNER_PORT", "8010"))
 
+# The farm's own on-site iWeathar station (e.g. "2235" for iWeathar Station
+# Bekfontein, https://iweathar.co.za/display?s_id=2235), if it has one.
+# Unset by default - a real station's readings beat Open-Meteo's grid-cell
+# estimate for this exact spot, but only for the farm that actually owns it.
+# Defaulting this to any one farm's station id would be the same silent
+# wrong-place bug farm_coords() in weather.py refuses to allow for GPS: every
+# other install of this app would quietly get Bekfontein's weather instead of
+# its own. See weather.fetch_iweathar_current().
+IWEATHAR_STATION_ID = os.environ.get("IWEATHAR_STATION_ID") or None
+
 FRONTEND_DIR = os.path.join(REPO_ROOT, "frontend")

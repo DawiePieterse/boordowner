@@ -1,4 +1,5 @@
 import json as _json
+import re as _re
 import threading
 import time as _time
 import urllib.error
@@ -9,6 +10,7 @@ from typing import Iterator, Optional
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
+import config
 import db
 from models_boord import SystemSetting
 from models_owner import WeatherHistory
@@ -24,7 +26,7 @@ _WMO_CONDITION = {
 }
 
 
-def fetch_weather(lat: float, lon: float) -> dict:
+def _fetch_open_meteo_current(lat: float, lon: float) -> dict:
     try:
         url = (
             f"https://api.open-meteo.com/v1/forecast"
@@ -43,6 +45,130 @@ def fetch_weather(lat: float, lon: float) -> dict:
         }
     except Exception:
         return {}
+
+
+# ---------------------------------------------------------------------------
+# The farm's own on-site station (iWeathar). No JSON API is published for it
+# - display?s_id=<id> (a plain HTML page meant for a browser) is the only
+# interface, so this scrapes it. Real sensor readings for this exact spot
+# beat Open-Meteo's grid-cell estimate, so fetch_weather() below prefers
+# these wherever the station actually measures something, and only asks
+# Open-Meteo to fill in what it can't (a cloud-based condition - the station
+# has no sky sensor - and everywhere this farm has no station configured or
+# it's unreachable).
+# ---------------------------------------------------------------------------
+
+IWEATHAR_URL = "https://iweathar.co.za/display"
+
+# The page's numbers live inside `class='numbers'>VALUE`, immediately after
+# the plain-text label naming the field ("Temperature:", "Rainfall Today:",
+# ...) - stable across the page's otherwise-loose HTML (mismatched quotes,
+# inconsistent tag case). This finds the label, then reads the first
+# `class='numbers'>` within a short window after it, rather than trying to
+# parse the markup properly - there is no structure here worth a real parser.
+_NUMBERS_RE = _re.compile(r"class=['\"]numbers['\"][^>]*>\s*(-?\d+(?:\.\d+)?)", _re.IGNORECASE)
+
+
+def _num_after(html: str, label: str, window: int = 250) -> Optional[float]:
+    idx = html.lower().find(label.lower())
+    if idx == -1:
+        return None
+    m = _NUMBERS_RE.search(html[idx: idx + window])
+    return float(m.group(1)) if m else None
+
+
+def _condition_from_rain_today_mm(mm: float) -> Optional[str]:
+    """A same-vocabulary condition (see _WMO_CONDITION) from the station's
+    own rain gauge, for when it has actually measured rain today. Thresholds
+    are a daily total, not comparable to the hourly ones weather codes use -
+    kept separate on purpose rather than reusing that table."""
+    if mm <= 0:
+        return None
+    if mm <= 2:
+        return "Drizzle"
+    if mm <= 10:
+        return "Rain"
+    return "Heavy Rain"
+
+
+def fetch_iweathar_current(station_id: str, timeout: int = 5) -> dict:
+    """Live conditions from the farm's own iWeathar station.
+
+    Returns {} on any network or parse failure, or if the page didn't yield
+    at least a temperature and a humidity reading - same "never block the
+    caller" contract as _fetch_open_meteo_current() above, and fetch_weather()
+    treats an empty dict here exactly like a dead Open-Meteo call.
+    """
+    try:
+        url = f"{IWEATHAR_URL}?s_id={station_id}"
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            html = resp.read().decode("iso-8859-1", errors="replace")
+
+        temp = _num_after(html, "Temperature:")
+        humidity = _num_after(html, "Humidity:")
+        if temp is None or humidity is None:
+            return {}
+
+        result = {"temp": temp, "humidity": humidity, "source": "iweathar"}
+
+        rain_today = _num_after(html, "Rainfall Today:")
+        if rain_today is not None:
+            result["rain_today_mm"] = rain_today
+            condition = _condition_from_rain_today_mm(rain_today)
+            if condition:
+                result["condition"] = condition
+
+        for label, key in (
+            ("Dew Point:", "dew_point_c"),
+            ("Barometer:", "pressure_mb"),
+            ("Wind Gust:", "wind_gust_kmh"),
+            ("Wind Average:", "wind_avg_kmh"),
+            ("Min Temp:", "temp_min_c"),
+            ("Max Temp:", "temp_max_c"),
+        ):
+            value = _num_after(html, label)
+            if value is not None:
+                result[key] = value
+
+        return result
+    except Exception:
+        return {}
+
+
+def fetch_weather(lat: float, lon: float) -> dict:
+    """Current conditions for the header strip. Blends the farm's own
+    iWeathar station (config.IWEATHAR_STATION_ID - real sensor readings for
+    this exact spot) with Open-Meteo (a modelled estimate for the
+    coordinates, and the only source for a cloud-based condition, since the
+    station has no sky sensor). The station wins wherever it has a reading;
+    Open-Meteo fills in whatever it doesn't. A farm with no station
+    configured, or one that's unreachable, gets exactly the old
+    Open-Meteo-only behaviour.
+    """
+    station = fetch_iweathar_current(config.IWEATHAR_STATION_ID) if config.IWEATHAR_STATION_ID else {}
+    meteo = _fetch_open_meteo_current(lat, lon)
+    if not station and not meteo:
+        return {}
+
+    temp = station.get("temp")
+    if temp is None:
+        temp = meteo.get("temp")
+    humidity = station.get("humidity")
+    if humidity is None:
+        humidity = meteo.get("humidity")
+    # The station's own rain gauge beats the forecast model's weather code
+    # for "is it raining right now at THIS farm" - a local shower can be
+    # under Open-Meteo's radar. Otherwise fall back to Open-Meteo's
+    # cloud-based condition, which the station cannot produce at all.
+    condition = station.get("condition") or meteo.get("condition")
+
+    result = {"temp": temp, "humidity": humidity, "condition": condition}
+    if station:
+        for key in ("source", "rain_today_mm", "wind_gust_kmh", "wind_avg_kmh",
+                    "temp_min_c", "temp_max_c", "dew_point_c", "pressure_mb"):
+            if key in station:
+                result[key] = station[key]
+    return result
 
 
 # A field device syncs a whole batch of crates at once and every crate gets

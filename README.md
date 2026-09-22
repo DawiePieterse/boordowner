@@ -197,6 +197,7 @@ the old mapping.
 | `BOORD_DB_PATH` | yes on the farm server | absolute path to Boord's `data/boord.db` (dev defaults to `../Boord/data/boord.db`) |
 | `OWNER_PORT` | no | default 8010 |
 | `OWNER_DATA_DIR` | no | default `<repo>/data` |
+| `IWEATHAR_STATION_ID` | no | this farm's on-site iWeathar station id (e.g. `2235` for iWeathar Station Bekfontein), if it has one - unset means Open-Meteo only, the old behaviour |
 
 ## Updates
 
@@ -264,6 +265,16 @@ migrates it on every startup. This app opens it read-only
   `fetch_weather_cached` (~10 min TTL): the strip refreshes on every dashboard
   load and pull-to-refresh, several owners may have it open, and Open-Meteo
   only updates every ~15 minutes anyway.
+- If `IWEATHAR_STATION_ID` is set, that current-conditions reading is a blend:
+  `weather.fetch_iweathar_current()` scrapes the farm's own iWeathar station
+  (there is no JSON API — `display?s_id=<id>` is a plain HTML page) and its
+  temperature, humidity and rain-gauge reading win over Open-Meteo's
+  grid-cell estimate for that farm's exact spot; Open-Meteo still supplies
+  the cloud-based condition text, since the station has no sky sensor, and
+  is the sole source whenever no station is configured or it's unreachable.
+  It never touches `WeatherHistory` — the station's page has no historical
+  export, so the Weather tab, Risk indicator and Harvest Forecast stay
+  Open-Meteo only.
 
 - **`models_boord.py` is a partial mirror.** Its header lists every column
   this app reads. Boord can rename or drop one in a migration — when that

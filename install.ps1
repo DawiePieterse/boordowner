@@ -169,6 +169,15 @@ try {
         }
     }
 
+    # --- Step 3b: On-farm weather station (optional) ---
+    # If this farm has its own iWeathar station, its readings beat
+    # Open-Meteo's grid-cell estimate for the header strip - see
+    # weather.fetch_iweathar_current(). Blank skips it: Open-Meteo only,
+    # same as before this existed. The id is the s_id= number in the
+    # station's iweathar.co.za/display?s_id=<id> link.
+    Write-Step "On-farm weather station (optional)..."
+    $iweathar = Read-Host "iWeathar station id, if this farm has one (blank to skip)"
+
     # --- Step 4: Virtual environment ---
     Write-Step "Setting up the app's virtual environment..."
     if (-not (Test-Path $VenvDir)) { & $pythonExe -m venv $VenvDir; Write-Ok "Created virtual environment" }
@@ -206,10 +215,13 @@ try {
     # proxies to http://localhost:8010 and is reachable inside the tailnet
     # only. Widening this to 0.0.0.0 publishes the whole dashboard to anyone
     # on the farm's wifi, with no password to stop them.
+    $iweatharLine = ""
+    if ($iweathar) { $iweatharLine = "set ""IWEATHAR_STATION_ID=$iweathar""" }
     $launcher = @"
 @echo off
 cd /d "$BackendDir"
 set "BOORD_DB_PATH=$boordDb"
+$iweatharLine
 "$venvPython" -m uvicorn main:app --host 127.0.0.1 --port $Port
 "@
     Set-Content -Path $LauncherPath -Value $launcher -Encoding ASCII

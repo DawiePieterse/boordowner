@@ -12,6 +12,7 @@ Boord they were all one session.
 """
 import io
 import os
+from collections import defaultdict
 from datetime import date
 
 import openpyxl
@@ -180,6 +181,12 @@ def historical_harvest_data_report(boord: Session = Depends(get_boord_session),
             cell.font = Font(bold=True, size=14)
         cell.alignment = Alignment(wrap_text=True, vertical="top")
 
+    # Grouped once rather than rescanning every day's row for every year;
+    # order within a year is kept so the float sums come out identical.
+    day_kg_by_year: dict = defaultdict(list)  # year -> [(block_id, date, kg)]
+    for (y, block_id, d), kg in day_kg.items():
+        day_kg_by_year[y].append((block_id, d, kg))
+
     # --- Season Summary: one row per season, every year on file ---
     if all_years:
         ss = wb.create_sheet("Season Summary")
@@ -189,15 +196,19 @@ def historical_harvest_data_report(boord: Session = Depends(get_boord_session),
         season_total = {}
         for year in all_years:
             if year in years:
-                season_total[year] = sum(kg for (y, _, _), kg in day_kg.items() if y == year)
+                season_total[year] = sum(kg for _, _, kg in day_kg_by_year[year])
             elif (year, None) in annual_kg:
                 season_total[year] = annual_kg[(year, None)]
             else:
                 season_total[year] = sum(kg for (y, bid), kg in annual_kg.items()
                                           if y == year and bid is not None)
+        blocks_by_year: dict = defaultdict(set)
+        for (y, bid) in block_year_kg:
+            if bid is not None:
+                blocks_by_year[y].add(bid)
         for year in all_years:
             total = season_total[year]
-            block_count = len({bid for (y, bid) in block_year_kg if y == year and bid is not None})
+            block_count = len(blocks_by_year[year])
             # Only against the season immediately before - the record has
             # gaps (nothing for 2010-2011), and calling a three-year jump a
             # year-on-year change would read as a collapse or a boom that
@@ -271,9 +282,7 @@ def historical_harvest_data_report(boord: Session = Depends(get_boord_session),
     for year in years:
         year_days: dict = {}  # date -> {block_id: kg}
         year_blocks: set = set()
-        for (y, block_id, d), kg in day_kg.items():
-            if y != year:
-                continue
+        for block_id, d, kg in day_kg_by_year[year]:
             bucket = year_days.setdefault(d, {})
             bucket[block_id] = bucket.get(block_id, 0.0) + kg
             year_blocks.add(block_id)

@@ -134,5 +134,6 @@ def client():
         except OSError:
             pass
     weather_module._sync_failed_until = 0.0   # a failed sync in one test must not skip the next
+    weather_module.invalidate_history_stats()   # same path, new file: no figure carries over
     with TestClient(main.app) as c:   # startup: init_owner_db
         yield c

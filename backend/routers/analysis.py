@@ -61,7 +61,10 @@ def season_day_kg(boord: Session, owner: Session) -> dict:
     # as just another year so every chart below treats it uniformly.
     day_kg: dict = defaultdict(float)
     estimated_blocks: set = set()  # blocks with at least one hectare-ratio-split historical row
-    for h in owner.exec(select(HistoricalHarvest)).all():
+    # Only the columns used - a full ORM object per row is most of the cost.
+    for h in owner.exec(select(HistoricalHarvest.season_year, HistoricalHarvest.block_id,
+                               HistoricalHarvest.harvest_date, HistoricalHarvest.kg,
+                               HistoricalHarvest.estimated)).all():
         day_kg[(h.season_year, h.block_id, h.harvest_date)] += h.kg
         if h.estimated:
             estimated_blocks.add(h.block_id)
@@ -96,6 +99,14 @@ def season_day_kg(boord: Session, owner: Session) -> dict:
 
     return {"current_year": current_year, "anchor_month": anchor_month, "anchor_day": anchor_day,
             "blocks": blocks, "day_kg": day_kg, "estimated_blocks": estimated_blocks}
+
+
+def kg_by_year_month(day_kg: dict) -> dict:
+    """{season_year: {month: kg}} from season_day_kg()'s day_kg."""
+    year_month_kg: dict = defaultdict(lambda: defaultdict(float))
+    for (year, block_id, d), kg in day_kg.items():
+        year_month_kg[year][d.month] += kg
+    return year_month_kg
 
 
 def build_analysis_summary(boord: Session, owner: Session) -> dict:
@@ -274,9 +285,7 @@ def build_analysis_summary(boord: Session, owner: Session) -> dict:
     # Each cell carries both its kg and its share of that season's total, so
     # the heatmap can show "which months matter" in absolute and relative
     # terms at once.
-    year_month_kg: dict = defaultdict(lambda: defaultdict(float))
-    for (year, block_id, d), kg in day_kg.items():
-        year_month_kg[year][d.month] += kg
+    year_month_kg = kg_by_year_month(day_kg)
 
     monthly = []
     for year in all_years:

@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
 
 from db import get_boord_session, get_owner_session, own_farm_block_ids
-from models_boord import HarvestRecord, SystemSetting
+from models_boord import HarvestRecord
 from models_owner import HistoricalAnnualYield, WeatherHistory
-from routers.analysis import build_analysis_summary
+from routers.analysis import kg_by_year_month, season_day_kg
 from timeutil import day_bounds, to_local
 from weather import (farm_coords_and_release, farm_station_reading, fetch_forecast_hourly,
                       parse_hourly_rows, sync_recent_weather)
@@ -200,19 +200,16 @@ def _driver_value(rows: list, driver: dict, today: date = None, station_today: d
     def scaled(v):
         return None if v is None else v * scale
 
+    vals = [v for v in (getattr(r, field) for r in rows) if v is not None]
     if agg == "count_lt":
-        vals = [v for v in (getattr(r, field) for r in rows) if v is not None]
         return scaled(float(sum(1 for v in vals if v < driver["threshold"]))) if vals else None
     if agg == "count_gt":
-        vals = [v for v in (getattr(r, field) for r in rows) if v is not None]
         return scaled(float(sum(1 for v in vals if v > driver["threshold"]))) if vals else None
     if agg == "count_days_gt":
         days = {r.timestamp.date() for r in rows
                 if getattr(r, field) is not None and getattr(r, field) > driver["threshold"]}
-        any_data = any(getattr(r, field) is not None for r in rows)
-        return scaled(float(len(days))) if any_data else None
+        return scaled(float(len(days))) if vals else None
     if agg == "mean":
-        vals = [v for v in (getattr(r, field) for r in rows) if v is not None]
         return scaled(sum(vals) / len(vals)) if vals else None
     if agg == "sum":
         if (today is not None and station_today and field == "precipitation_mm"
@@ -223,7 +220,6 @@ def _driver_value(rows: list, driver: dict, today: date = None, station_today: d
             # the sum and substitute the gauge's real total in their place.
             other_days = sum(getattr(r, field) or 0 for r in rows if r.timestamp.date() != today)
             return scaled(other_days + station_today["rain_today_mm"])
-        vals = [v for v in (getattr(r, field) for r in rows) if v is not None]
         return scaled(sum(vals)) if vals else None
     if agg == "daily_max_mean":
         # Mean of each day's own peak - "how hot did the afternoons get,
@@ -269,12 +265,12 @@ def _compute_driver_state(boord: Session, owner: Session) -> dict:
     wrapper over this.
 
     Season totals come from two places, since the reference range now
-    reaches back past the app's own daily records: build_analysis_summary()
+    reaches back past the app's own daily records: season_day_kg()
     for the daily-tracked seasons (2020 on) and HistoricalAnnualYield for
     the annual-only ones before that (2012-2019).
 
     `boord` supplies SystemSetting; `owner` supplies HistoricalAnnualYield
-    and WeatherHistory. build_analysis_summary needs both."""
+    and WeatherHistory. season_day_kg needs both."""
     # Cached (weather.farm_station_reading, ~10 min TTL, shared with
     # the header strip) rather than fetched fresh - this runs on every Risk
     # tab load and Harvest Forecast refresh. Empty when no station is
@@ -283,11 +279,13 @@ def _compute_driver_state(boord: Session, owner: Session) -> dict:
     # today/station_today parameters.
     station_today = farm_station_reading()
 
-    settings = boord.exec(select(SystemSetting)).first()
-    current_year = settings.current_harvest_year if settings else date.today().year
-
-    analysis = build_analysis_summary(boord, owner)
-    kg_by_year = {m["year"]: m["total_kg"] for m in analysis["monthly"]}
+    season = season_day_kg(boord, owner)
+    current_year = season["current_year"]
+    # Same per-season totals as the Analysis tab's monthly panel, without
+    # building the rest of that summary.
+    year_month_kg = kg_by_year_month(season["day_kg"])
+    kg_by_year = {year: round(sum(year_month_kg[year].values()), 1)
+                  for year in sorted(set(year_month_kg) | {current_year})}
     annual_totals: dict = defaultdict(float)
     for a in owner.exec(select(HistoricalAnnualYield)).all():
         annual_totals[a.season_year] += a.kg

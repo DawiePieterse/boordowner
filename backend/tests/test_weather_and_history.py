@@ -446,3 +446,52 @@ def test_sync_keeps_what_landed_before_a_failure_and_backs_off(client, farm_has_
     assert _sync() == {"synced": 0, "error": True}
     assert len(calls) == 2
     weather_module._sync_failed_until = 0.0
+
+
+# --------------------------------------------------------------------------- #
+# The whole-table figures /history reports are cached until the table changes
+# --------------------------------------------------------------------------- #
+def test_history_reuses_its_whole_table_figures_until_the_table_changes(
+        client, farm_has_gps, monkeypatch):
+    """The years on file and the foreign-row count are each a full scan of
+    WeatherHistory. They are reused across loads, and dropped the moment the
+    table changes - by this process's own append, or by a write from
+    anywhere else (an import script), which only the validity key sees."""
+    scans = []
+    real_count = weather_router.foreign_row_count
+
+    def counting(*args):
+        scans.append(args)
+        return real_count(*args)
+    monkeypatch.setattr(weather_router, "foreign_row_count", counting)
+    monkeypatch.setattr(weather_module, "fetch_historical_hourly",
+                        lambda *a, **k: {"hourly": {"time": []}})
+    yesterday = (datetime.now() - timedelta(days=1)).replace(hour=6, minute=0, second=0, microsecond=0)
+    with Session(owner_engine) as s:
+        s.add(WeatherHistory(timestamp=datetime(2024, 7, 1, 12), temp_c=20.0,
+                             lat=-20.0, lon=25.0))   # somewhere else
+        s.add(WeatherHistory(timestamp=yesterday, temp_c=20.0, lat=-34.0, lon=18.5))
+        s.commit()
+
+    first = client.get("/api/weather/history").json()
+    second = client.get("/api/weather/history").json()
+    assert second == first, "a cached figure must not change the response"
+    assert first["hours_elsewhere"] == 1
+    assert first["years"] == sorted({2024, yesterday.year})
+    assert len(scans) == 1, "the second load reused the first one's scan"
+
+    # This process's own catch-up appends: invalidated explicitly.
+    _recording_fetch(monkeypatch, hours_per_call=48)
+    third = client.get("/api/weather/history").json()
+    assert third["sync"]["synced"] > 0
+    assert len(scans) == 2
+
+    # A write the app never hears about, as an import script's would be.
+    with Session(owner_engine) as s:
+        s.add(WeatherHistory(timestamp=datetime(2019, 7, 1, 12), temp_c=20.0,
+                             lat=-20.0, lon=25.0))
+        s.commit()
+    fourth = client.get("/api/weather/history").json()
+    assert fourth["years"] == sorted({2019, 2024, yesterday.year})
+    assert fourth["hours_elsewhere"] == 2
+    assert len(scans) == 3

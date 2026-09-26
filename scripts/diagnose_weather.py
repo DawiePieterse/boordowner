@@ -18,7 +18,6 @@ opening the tab does, so timing anything else would be measuring a
 different thing - but it does mean this writes to owner.db when the record
 is behind. It never deletes or rewrites.
 """
-import io
 import json
 import os
 import sys

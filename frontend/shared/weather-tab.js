@@ -93,8 +93,8 @@ const LWWeatherTab = (() => {
           // on every pass and never end.
           missing.forEach((y) => { if (!(y in _pointsByYear)) _pointsByYear[y] = []; });
         } catch (e) {
-          if (Boord.isNetworkError(e)) { Boord.setOffline(true); }
-          else { console.error("Weather year load failed:", e); Boord.toast("Could not load that year"); }
+          // A network failure has already raised the offline banner (api()).
+          if (!Boord.isNetworkError(e)) { console.error("Weather year load failed:", e); Boord.toast("Could not load that year"); }
           // Untick what could not be fetched, so the filter row keeps telling
           // the truth about what is on the chart.
           missing.forEach((y) => _selectedYears.delete(y));
@@ -154,25 +154,11 @@ const LWWeatherTab = (() => {
     _fetchHistory = fetchHistory;
     if (!force && _data && Boord.isFresh(_loadedAt)) return;
     if (!_data) LWCharts.loadingState(document.getElementById("weatherChart"), "Loading the weather record...");
-    let result;
-    try {
-      result = await Boord.cachedLoad("boord_cached_weather", () => fetchHistory([..._selectedYears]));
-    } catch (e) {
-      if (Boord.isNetworkError(e)) {
-        Boord.setOffline(true);
-        Boord.setOfflineBannerText("Offline - no saved weather on this device yet");
-        return;
-      }
-      console.error("Weather load failed:", e);
-      Boord.toast("Could not load weather data");
-      return;
-    }
-    if (result.cached) {
-      Boord.setOffline(true);
-      Boord.setOfflineBannerText(`Offline - showing weather from ${Boord.describeAge(result.at)}`);
-    } else {
-      Boord.setOffline(false);
-    }
+    const result = await Boord.loadTab({
+      key: "boord_cached_weather", fetchFn: () => fetchHistory([..._selectedYears]),
+      noun: "weather", label: "Weather",
+    });
+    if (!result) return;
     const data = result.data;
     _absorb(data);
     _loadedAt = result.cached ? 0 : Date.now();

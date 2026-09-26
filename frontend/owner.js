@@ -136,12 +136,13 @@ async function loadWeather(opts) {
     //
     // On an 8s budget that raced, and losing the race did not look like
     // slowness: isNetworkError treats the abort as "server unreachable", so
-    // the tab set the GLOBAL offline flag and the amber banner appeared on
+    // api() set the GLOBAL offline flag and the amber banner appeared on
     // every screen until some other tab loaded successfully. The server was
     // fine and still working the whole time.
     (years) => Boord.api(
       `/api/weather/history${years && years.length ? `?years=${years.join(",")}` : ""}`,
       { timeoutMs: 45000 }),
+    opts,
   );
 }
 
@@ -303,7 +304,7 @@ async function refreshDashboard() {
     // A network failure is NOT an expired session - fall back to cached
     // figures. Only a real HTTP 401/403 sends the user back to sign in.
     if (Boord.isNetworkError(e)) {
-      Boord.setOffline(true);
+      // api() has already raised the banner; this only picks its wording.
       const cached = findCachedDashboard(qs);
       if (renderCachedDashboard(qs)) {
         setOfflineBannerText(`Offline - showing figures from ${describeAge(cached.at)}`);
@@ -316,7 +317,6 @@ async function refreshDashboard() {
     Boord.toast("Could not load the dashboard");
     return;
   }
-  Boord.setOffline(false);
 
   renderDashboardKpis(harvesting, inTransit, received, summary);
   renderDashboardLists(harvesting, inTransit, received, summary);
@@ -488,9 +488,7 @@ async function refreshAppData() {
       _systemSettings = await Boord.api("/api/system-settings");
       localStorage.setItem("boord_cached_settings", JSON.stringify(_systemSettings));
       updateBannerFarmName();
-    } catch (e) {
-      if (Boord.isNetworkError(e)) Boord.setOffline(true);
-    }
+    } catch (e) { /* the cached copy stands; api() flags a lost connection */ }
   })();
   updateBannerWeather();
   await Promise.all([settings, loadSuppliers(), refreshDashboard()]);

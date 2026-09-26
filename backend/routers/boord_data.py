@@ -22,7 +22,7 @@ from sqlmodel import Session, select
 
 from db import get_boord_session
 from models_boord import HarvestRecord, Lot, LotStatus, Supplier, SystemSetting
-from timeutil import day_bounds
+from timeutil import as_utc, day_bounds
 
 router = APIRouter(tags=["boord-data"])
 
@@ -40,8 +40,7 @@ def _urgency(age_minutes: float, settings: SystemSetting) -> str:
 
 def _with_urgency(lot: Lot, settings: SystemSetting, suppliers: dict) -> dict:
     now = datetime.now(timezone.utc)
-    ts = lot.timestamp if lot.timestamp.tzinfo else lot.timestamp.replace(tzinfo=timezone.utc)
-    age_minutes = (now - ts).total_seconds() / 60
+    age_minutes = (now - as_utc(lot.timestamp)).total_seconds() / 60
     supplier = suppliers.get(lot.supplier_id)
     return {
         **lot.model_dump(),

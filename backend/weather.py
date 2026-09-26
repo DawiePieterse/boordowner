@@ -2,7 +2,6 @@ import json as _json
 import re as _re
 import threading
 import time as _time
-import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta
 from typing import Iterator, Optional
@@ -319,6 +318,70 @@ def foreign_row_count(session: Session, lat: float, lon: float) -> int:
     ).one()
 
 
+# --------------------------------------------------------------------------- #
+# Whole-table figures the Weather tab asks for on every load
+# --------------------------------------------------------------------------- #
+# The years on file and foreign_row_count() both scan every WeatherHistory
+# row (a function on the column, so the timestamp index is no help) - two
+# full passes over ~350k rows per /api/weather/history call, for answers
+# that change only when the table does. They are kept here instead, and
+# dropped by invalidate_history_stats(), which every writer in this process
+# calls after committing (sync_recent_weather, the browser backfill).
+#
+# The import scripts write from another process and cannot reach this
+# cache, so each entry is also stored under a validity key read fresh on
+# every lookup: row count, first/last timestamp and highest id. Each is one
+# scalar subquery - SQLite answers min/max off the index and count(*) off
+# the smallest index, ~3 ms together on the full record, against ~130 ms for
+# the two scans. Any append or delete-and-reinsert moves at least one of
+# them. The engine's URL is part of the key too, so two databases (the test
+# suite's fresh owner.db per test) never share an entry.
+_history_stats_lock = threading.Lock()
+_history_stats = {"key": None, "values": {}, "generation": 0}
+
+
+def invalidate_history_stats() -> None:
+    with _history_stats_lock:
+        _history_stats["key"] = None
+        _history_stats["values"] = {}
+        _history_stats["generation"] += 1
+
+
+def _history_validity_key(session: Session) -> tuple:
+    # Separate scalar subqueries, not one select(count(), min(), max()):
+    # SQLite only takes the min/max-off-the-index shortcut for an aggregate
+    # standing alone, and folded together all four walk the table.
+    return (str(session.get_bind().url),) + tuple(session.exec(select(
+        select(func.count()).select_from(WeatherHistory).scalar_subquery(),
+        select(func.min(WeatherHistory.timestamp)).scalar_subquery(),
+        select(func.max(WeatherHistory.timestamp)).scalar_subquery(),
+        select(func.max(WeatherHistory.id)).scalar_subquery(),
+    )).one())
+
+
+def cached_history_stat(session: Session, name: tuple, compute):
+    """compute()'s result, reused until WeatherHistory changes. `name`
+    identifies the figure and every argument it depends on (the farm's
+    coordinates, for the foreign-row count)."""
+    key = _history_validity_key(session)
+    with _history_stats_lock:
+        if _history_stats["key"] == key and name in _history_stats["values"]:
+            return _history_stats["values"][name]
+        generation = _history_stats["generation"]
+    value = compute()
+    with _history_stats_lock:
+        # A write in this process while compute() ran may or may not be in
+        # `value` - don't keep it. (One from elsewhere moves the validity
+        # key, so an entry stored under the old key is simply never hit.)
+        if _history_stats["generation"] != generation:
+            return value
+        if _history_stats["key"] != key:
+            _history_stats["key"] = key
+            _history_stats["values"] = {}
+        _history_stats["values"][name] = value
+    return value
+
+
 def chunk_date_range(start: date, end: date, years: int) -> Iterator[tuple]:
     """[start, end] split into calendar-aligned chunks of `years` years."""
     cur = start
@@ -328,14 +391,18 @@ def chunk_date_range(start: date, end: date, years: int) -> Iterator[tuple]:
         cur = chunk_end + timedelta(days=1)
 
 
+def _get_json(url: str, timeout: int) -> dict:
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        return _json.loads(resp.read())
+
+
 def fetch_historical_hourly(lat: float, lon: float, start_date: str, end_date: str, timeout: int = 120) -> dict:
     url = (
         "https://historical-forecast-api.open-meteo.com/v1/forecast"
         f"?latitude={lat}&longitude={lon}&start_date={start_date}&end_date={end_date}"
         f"&hourly={HOURLY_FIELDS}&timezone=auto"
     )
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
-        return _json.loads(resp.read())
+    return _get_json(url, timeout)
 
 
 # Sibling of fetch_historical_hourly() above, for dates before that API's own
@@ -360,8 +427,7 @@ def fetch_archive_hourly(lat: float, lon: float, start_date: str, end_date: str,
         f"?latitude={lat}&longitude={lon}&start_date={start_date}&end_date={end_date}"
         f"&hourly={ARCHIVE_HOURLY_FIELDS}&timezone=auto"
     )
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
-        return _json.loads(resp.read())
+    return _get_json(url, timeout)
 
 
 # Sibling of fetch_historical_hourly() above, for routers/risk.py's Harvest
@@ -382,8 +448,7 @@ def fetch_forecast_hourly(lat: float, lon: float, days: int = 16, timeout: int =
         f"?latitude={lat}&longitude={lon}&forecast_days={days}"
         f"&hourly={HOURLY_FIELDS}&timezone=auto"
     )
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
-        return _json.loads(resp.read())
+    return _get_json(url, timeout)
 
 
 def parse_hourly_rows(data: dict, lat: float, lon: float) -> list:
@@ -567,6 +632,7 @@ def sync_recent_weather(owner: Session, boord: Session) -> dict:
                 with db.weather_append_lock:
                     owner.add_all(new_rows)
                     owner.commit()
+                invalidate_history_stats()
                 synced += len(new_rows)
                 newest = max(r.timestamp for r in new_rows)
             chunk_start = chunk_end + timedelta(days=1)

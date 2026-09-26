@@ -40,25 +40,10 @@ const LWAnalysisTab = (() => {
   async function load(fetchSummary, { force = false } = {}) {
     if (!force && _data && Boord.isFresh(_loadedAt)) return;
     if (!_data) LWCharts.loadingState(document.getElementById("analysisKpiGrid"), "Loading this season...");
-    let result;
-    try {
-      result = await Boord.cachedLoad("boord_cached_analysis", fetchSummary);
-    } catch (e) {
-      if (Boord.isNetworkError(e)) {
-        Boord.setOffline(true);
-        Boord.setOfflineBannerText("Offline - no saved analysis on this device yet");
-        return;
-      }
-      console.error("Analysis load failed:", e);
-      Boord.toast("Could not load analysis data");
-      return;
-    }
-    if (result.cached) {
-      Boord.setOffline(true);
-      Boord.setOfflineBannerText(`Offline - showing analysis from ${Boord.describeAge(result.at)}`);
-    } else {
-      Boord.setOffline(false);
-    }
+    const result = await Boord.loadTab({
+      key: "boord_cached_analysis", fetchFn: fetchSummary, noun: "analysis", label: "Analysis",
+    });
+    if (!result) return;
     const data = result.data;
     _data = data;
     _loadedAt = result.cached ? 0 : Date.now();   // saved figures: try again on the next tap
@@ -309,7 +294,7 @@ const LWAnalysisTab = (() => {
       color: y.is_current ? "#0A2F6B" : "#e08e5c",
       annotation: y.first_day != null ? `${y.span_days}d span, ${y.pick_days} pick days` : "No picking yet",
     }));
-    LWCharts.rangeBarChart(document.getElementById("seasonLengthChart"), { rows });
+    LWCharts.rangeBarChart(document.getElementById("seasonLengthChart"), { rows, anchor: _anchor() });
   }
 
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",

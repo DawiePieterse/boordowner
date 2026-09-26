@@ -52,25 +52,10 @@ const LWRiskTab = (() => {
       LWCharts.loadingState(document.getElementById("riskScoreHeader"), "Scoring this season...");
       LWCharts.loadingState(document.getElementById("harvestForecastCard"), "Working out this season's forecast...");
     }
-    let result;
-    try {
-      result = await Boord.cachedLoad("boord_cached_risk", fetchSummary);
-    } catch (e) {
-      if (Boord.isNetworkError(e)) {
-        Boord.setOffline(true);
-        Boord.setOfflineBannerText("Offline - no saved risk figures on this device yet");
-        return;
-      }
-      console.error("Risk load failed:", e);
-      Boord.toast("Could not load risk data");
-      return;
-    }
-    if (result.cached) {
-      Boord.setOffline(true);
-      Boord.setOfflineBannerText(`Offline - showing risk figures from ${Boord.describeAge(result.at)}`);
-    } else {
-      Boord.setOffline(false);
-    }
+    const result = await Boord.loadTab({
+      key: "boord_cached_risk", fetchFn: fetchSummary, noun: "risk figures", label: "Risk",
+    });
+    if (!result) return;
     const data = result.data;
     _data = data;
     _loadedAt = result.cached ? 0 : Date.now();

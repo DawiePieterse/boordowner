@@ -491,7 +491,7 @@ const LWCharts = (() => {
   // A compact inline sparkline - no axes, no legend, just the shape of a
   // short recent series (e.g. the Harvest Forecast card's last-7-days
   // actual kg) sitting next to a headline number. points: [{x, y, label}]
-  // in x order; label is what a hover shows (defaults to x).
+  // in x order; label is what a hover shows (defaults to "x: y").
   function sparkline(container, points, { color = PALETTE[0], height = 36 } = {}) {
     if (!points || !points.length) return emptyState(container, "No data");
     const width = Math.max(points.length * 16, 60);
@@ -516,7 +516,7 @@ const LWCharts = (() => {
     // "leading up to now" rather than an ambiguous trailing line.
     coords.forEach(([x, y], i) => {
       const titleEl = svg("title");
-      titleEl.textContent = `${points[i].label ?? points[i].x}: ${points[i].y}`;
+      titleEl.textContent = points[i].label ?? `${points[i].x}: ${points[i].y}`;
       children.push(svg("circle", { cx: x, cy: y, r: 7, fill: "transparent" }, [titleEl]));
     });
     const [lastX, lastY] = coords[coords.length - 1];

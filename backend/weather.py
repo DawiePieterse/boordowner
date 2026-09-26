@@ -69,11 +69,11 @@ IWEATHAR_URL = "https://iweathar.co.za/display"
 _NUMBERS_RE = _re.compile(r"class=['\"]numbers['\"][^>]*>\s*(-?\d+(?:\.\d+)?)", _re.IGNORECASE)
 
 
-def _num_after(html: str, label: str, window: int = 250) -> Optional[float]:
-    idx = html.lower().find(label.lower())
+def _num_after(html_lower: str, label: str, window: int = 250) -> Optional[float]:
+    idx = html_lower.find(label.lower())
     if idx == -1:
         return None
-    m = _NUMBERS_RE.search(html[idx: idx + window])
+    m = _NUMBERS_RE.search(html_lower[idx: idx + window])
     return float(m.group(1)) if m else None
 
 
@@ -102,7 +102,7 @@ def fetch_iweathar_current(station_id: str, timeout: int = 5) -> dict:
     try:
         url = f"{IWEATHAR_URL}?s_id={station_id}"
         with urllib.request.urlopen(url, timeout=timeout) as resp:
-            html = resp.read().decode("iso-8859-1", errors="replace")
+            html = resp.read().decode("iso-8859-1", errors="replace").lower()
 
         temp = _num_after(html, "Temperature:")
         humidity = _num_after(html, "Humidity:")
@@ -135,6 +135,23 @@ def fetch_iweathar_current(station_id: str, timeout: int = 5) -> dict:
         return {}
 
 
+def _ttl_cached(cache: dict, lock: threading.Lock, key, fetch, ttl: int = 600, ttl_on_failure: int = 60):
+    """(expiry, value) TTL cache shared by the station scrape and the blended
+    reading below. An empty (failed) result is cached for ttl_on_failure only,
+    so a dropped link doesn't stall every caller on a timeout."""
+    now = _time.monotonic()
+    with lock:
+        hit = cache.get(key)
+        if hit and now < hit[0]:
+            return hit[1]
+
+    value = fetch()
+
+    with lock:
+        cache[key] = (now + (ttl if value else ttl_on_failure), value)
+    return value
+
+
 # Same "don't hammer a hobbyist's server every request" reasoning as
 # fetch_weather_cached() below, applied to the station scrape on its own -
 # routers/risk.py reads today's rain/temp extremes from this same cache to
@@ -142,25 +159,19 @@ def fetch_iweathar_current(station_id: str, timeout: int = 5) -> dict:
 # routers/risk.py's DRIVERS and _driver_value's today/station_today
 # parameters), so a Risk tab load and a dashboard load share one cached
 # reading instead of each scraping the page separately.
-_STATION_CACHE_TTL_SECONDS = 600
-_STATION_CACHE_TTL_ON_FAILURE_SECONDS = 60
 _station_cache: dict = {}
 _station_cache_lock = threading.Lock()
 
 
 def fetch_iweathar_current_cached(station_id: str) -> dict:
-    now = _time.monotonic()
-    with _station_cache_lock:
-        hit = _station_cache.get(station_id)
-        if hit and now < hit[0]:
-            return hit[1]
+    return _ttl_cached(_station_cache, _station_cache_lock, station_id,
+                       lambda: fetch_iweathar_current(station_id))
 
-    reading = fetch_iweathar_current(station_id)
 
-    ttl = _STATION_CACHE_TTL_SECONDS if reading else _STATION_CACHE_TTL_ON_FAILURE_SECONDS
-    with _station_cache_lock:
-        _station_cache[station_id] = (now + ttl, reading)
-    return reading
+def farm_station_reading() -> dict:
+    """This install's own station reading (cached), or {} when no station is
+    configured (config.IWEATHAR_STATION_ID unset)."""
+    return fetch_iweathar_current_cached(config.IWEATHAR_STATION_ID) if config.IWEATHAR_STATION_ID else {}
 
 
 def fetch_weather(lat: float, lon: float) -> dict:
@@ -173,30 +184,17 @@ def fetch_weather(lat: float, lon: float) -> dict:
     configured, or one that's unreachable, gets exactly the old
     Open-Meteo-only behaviour.
     """
-    station = fetch_iweathar_current_cached(config.IWEATHAR_STATION_ID) if config.IWEATHAR_STATION_ID else {}
-    meteo = _fetch_open_meteo_current(lat, lon)
+    station = farm_station_reading()
+    # A station reading always has temp and humidity (fetch_iweathar_current
+    # returns {} otherwise); when it also has a rain-derived condition,
+    # Open-Meteo has nothing left to contribute.
+    meteo = {} if "condition" in station else _fetch_open_meteo_current(lat, lon)
     if not station and not meteo:
         return {}
-
-    temp = station.get("temp")
-    if temp is None:
-        temp = meteo.get("temp")
-    humidity = station.get("humidity")
-    if humidity is None:
-        humidity = meteo.get("humidity")
-    # The station's own rain gauge beats the forecast model's weather code
-    # for "is it raining right now at THIS farm" - a local shower can be
-    # under Open-Meteo's radar. Otherwise fall back to Open-Meteo's
-    # cloud-based condition, which the station cannot produce at all.
-    condition = station.get("condition") or meteo.get("condition")
-
-    result = {"temp": temp, "humidity": humidity, "condition": condition}
-    if station:
-        for key in ("source", "rain_today_mm", "wind_gust_kmh", "wind_avg_kmh",
-                    "temp_min_c", "temp_max_c", "dew_point_c", "pressure_mb"):
-            if key in station:
-                result[key] = station[key]
-    return result
+    # Station wins wherever it has a reading - including its rain-gauge
+    # condition, which beats the model's weather code for "is it raining at
+    # THIS farm" (a local shower can be under Open-Meteo's radar).
+    return {**{k: meteo.get(k) for k in ("temp", "humidity", "condition")}, **station}
 
 
 # A field device syncs a whole batch of crates at once and every crate gets
@@ -205,26 +203,13 @@ def fetch_weather(lat: float, lon: float) -> dict:
 # holding up the sync. The upstream service only refreshes every ~15 minutes,
 # so a short cache costs nothing in accuracy. Failures are cached briefly too,
 # so a dropped link doesn't stall every following crate on a 5s timeout.
-_CACHE_TTL_SECONDS = 600
-_CACHE_TTL_ON_FAILURE_SECONDS = 60
 _cache: dict = {}
 _cache_lock = threading.Lock()
 
 
 def fetch_weather_cached(lat: float, lon: float) -> dict:
-    key = (round(lat, 4), round(lon, 4))
-    now = _time.monotonic()
-    with _cache_lock:
-        hit = _cache.get(key)
-        if hit and now < hit[0]:
-            return hit[1]
-
-    weather = fetch_weather(lat, lon)
-
-    ttl = _CACHE_TTL_SECONDS if weather else _CACHE_TTL_ON_FAILURE_SECONDS
-    with _cache_lock:
-        _cache[key] = (now + ttl, weather)
-    return weather
+    return _ttl_cached(_cache, _cache_lock, (round(lat, 4), round(lon, 4)),
+                       lambda: fetch_weather(lat, lon))
 
 
 # ---------------------------------------------------------------------------

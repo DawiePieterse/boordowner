@@ -5,13 +5,12 @@ from types import SimpleNamespace
 from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
 
-import config
 from db import get_boord_session, get_owner_session, own_farm_block_ids
 from models_boord import HarvestRecord, SystemSetting
 from models_owner import HistoricalAnnualYield, WeatherHistory
 from routers.analysis import build_analysis_summary
 from timeutil import day_bounds, to_local
-from weather import (farm_coords_and_release, fetch_forecast_hourly, fetch_iweathar_current_cached,
+from weather import (farm_coords_and_release, farm_station_reading, fetch_forecast_hourly,
                       parse_hourly_rows, sync_recent_weather)
 
 router = APIRouter(prefix="/api/risk", tags=["risk"])
@@ -172,7 +171,7 @@ def _driver_value(rows: list, driver: dict, today: date = None, station_today: d
     as hours.
 
     `today`/`station_today` fold the farm's own on-site iWeathar station
-    (weather.fetch_iweathar_current_cached(), see config.IWEATHAR_STATION_ID)
+    (weather.farm_station_reading(), see config.IWEATHAR_STATION_ID)
     into the two drivers it can actually improve on Open-Meteo for TODAY
     specifically - never any other day, since the station keeps no history.
     Both are None from every caller except the current season's in-progress
@@ -207,8 +206,7 @@ def _driver_value(rows: list, driver: dict, today: date = None, station_today: d
             # rain gauge both describe the SAME running total, not two
             # rainfalls to add together - drop today's modelled hours from
             # the sum and substitute the gauge's real total in their place.
-            other_days = sum(v for r, v in ((r, getattr(r, field)) for r in rows)
-                             if v is not None and r.timestamp.date() != today)
+            other_days = sum(getattr(r, field) or 0 for r in rows if r.timestamp.date() != today)
             return scaled(other_days + station_today["rain_today_mm"])
         vals = [v for v in (getattr(r, field) for r in rows) if v is not None]
         return scaled(sum(vals)) if vals else None
@@ -262,13 +260,13 @@ def _compute_driver_state(boord: Session, owner: Session) -> dict:
 
     `boord` supplies SystemSetting; `owner` supplies HistoricalAnnualYield
     and WeatherHistory. build_analysis_summary needs both."""
-    # Cached (weather.fetch_iweathar_current_cached, ~10 min TTL, shared with
+    # Cached (weather.farm_station_reading, ~10 min TTL, shared with
     # the header strip) rather than fetched fresh - this runs on every Risk
     # tab load and Harvest Forecast refresh. Empty when no station is
     # configured or it's unreachable, in which case every driver below
     # computes exactly as it did before this existed - see _driver_value's
     # today/station_today parameters.
-    station_today = fetch_iweathar_current_cached(config.IWEATHAR_STATION_ID) if config.IWEATHAR_STATION_ID else {}
+    station_today = farm_station_reading()
 
     settings = boord.exec(select(SystemSetting)).first()
     current_year = settings.current_harvest_year if settings else date.today().year
@@ -329,10 +327,8 @@ def _compute_driver_state(boord: Session, owner: Session) -> dict:
                 continue
             cutoff = today if status == "in_progress" else None
             w_rows = _window_rows(by_date, year, d["window_md"], cutoff)
-            if status == "in_progress":
-                value_by_year[d["key"]][year] = _driver_value(w_rows, d, today=today, station_today=station_today)
-            else:
-                value_by_year[d["key"]][year] = _driver_value(w_rows, d)
+            value_by_year[d["key"]][year] = _driver_value(
+                w_rows, d, today=cutoff, station_today=station_today if cutoff else None)
 
     # Reference range per driver, for normalizing every season (including
     # the current one) on the same scale.
@@ -644,12 +640,13 @@ def build_harvest_forecast(boord: Session, owner: Session) -> dict:
     """
     sync_recent_weather(owner, boord)  # keep "actual" as fresh as the Weather tab would
     state = _compute_driver_state(boord, owner)
+    last_7_days_kg = _last_7_days_kg(boord)  # before Boord is released below
 
     forecast_unavailable = False
     forecast_by_date = defaultdict(list)
     try:
-        # Released before the forecast fetch below - _compute_driver_state()
-        # above is the last thing that needs Boord. See
+        # Released before the forecast fetch below - nothing after this
+        # needs Boord. See
         # weather.farm_coords_and_release().
         coords = farm_coords_and_release(boord)
         if coords is None:
@@ -781,7 +778,7 @@ def build_harvest_forecast(boord: Session, owner: Session) -> dict:
         "regression": regression,
         "scenarios": scenarios_out,
         "drivers": driver_data,
-        "last_7_days_kg": _last_7_days_kg(boord),
+        "last_7_days_kg": last_7_days_kg,
     }
 
 

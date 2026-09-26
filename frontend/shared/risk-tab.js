@@ -314,7 +314,7 @@ const LWRiskTab = (() => {
       </div>`;
 
     const sparkEl = document.getElementById("expectedKgSparkline");
-    if (sparkEl && forecast.last_7_days_kg && forecast.last_7_days_kg.length) {
+    if (sparkEl) {
       const points = forecast.last_7_days_kg.map((day) => ({
         x: day.date, y: day.kg,
         label: `${new Date(`${day.date}T00:00:00`).toLocaleDateString(undefined,

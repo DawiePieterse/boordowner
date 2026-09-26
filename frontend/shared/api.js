@@ -145,16 +145,6 @@ const Boord = {
     return d ? d.toLocaleString() : fallback;
   },
 
-  fmtTime(value, fallback = "") {
-    const d = Boord.parseServerDate(value);
-    return d ? d.toLocaleTimeString() : fallback;
-  },
-
-  fmtDate(value, fallback = "") {
-    const d = Boord.parseServerDate(value);
-    return d ? d.toLocaleDateString() : fallback;
-  },
-
   // "Today" as the farm sees it, formatted for a date input. toISOString()
   // would give the UTC date, which is still yesterday between midnight and
   // 02:00 local - early enough to matter once picking starts before dawn.
@@ -215,8 +205,6 @@ const Boord = {
     if (el) el.classList.toggle("hidden", !val);
     if (typeof Boord.onOfflineChange === "function") Boord.onOfflineChange(val);
   },
-
-  isOffline() { return !!Boord._offline; },
 
   // Screens can set this to react to offline flips (e.g. recolor a status pill).
   onOfflineChange: null,

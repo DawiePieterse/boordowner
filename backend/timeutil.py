@@ -21,12 +21,6 @@ def to_local(dt: Optional[datetime]) -> Optional[datetime]:
     return as_utc(dt).astimezone() if dt is not None else None
 
 
-def local_str(dt: Optional[datetime], fallback: str = "") -> str:
-    """Local 'YYYY-MM-DD HH:MM' for reports and exports."""
-    local = to_local(dt)
-    return local.strftime("%Y-%m-%d %H:%M") if local else fallback
-
-
 def day_bounds(start_day: date, end_day: Optional[date] = None) -> tuple:
     """The naive-UTC range matching a span of local calendar days.
 

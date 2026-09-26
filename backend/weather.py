@@ -2,7 +2,6 @@ import json as _json
 import re as _re
 import threading
 import time as _time
-import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta
 from typing import Iterator, Optional
@@ -328,14 +327,18 @@ def chunk_date_range(start: date, end: date, years: int) -> Iterator[tuple]:
         cur = chunk_end + timedelta(days=1)
 
 
+def _get_json(url: str, timeout: int) -> dict:
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        return _json.loads(resp.read())
+
+
 def fetch_historical_hourly(lat: float, lon: float, start_date: str, end_date: str, timeout: int = 120) -> dict:
     url = (
         "https://historical-forecast-api.open-meteo.com/v1/forecast"
         f"?latitude={lat}&longitude={lon}&start_date={start_date}&end_date={end_date}"
         f"&hourly={HOURLY_FIELDS}&timezone=auto"
     )
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
-        return _json.loads(resp.read())
+    return _get_json(url, timeout)
 
 
 # Sibling of fetch_historical_hourly() above, for dates before that API's own
@@ -360,8 +363,7 @@ def fetch_archive_hourly(lat: float, lon: float, start_date: str, end_date: str,
         f"?latitude={lat}&longitude={lon}&start_date={start_date}&end_date={end_date}"
         f"&hourly={ARCHIVE_HOURLY_FIELDS}&timezone=auto"
     )
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
-        return _json.loads(resp.read())
+    return _get_json(url, timeout)
 
 
 # Sibling of fetch_historical_hourly() above, for routers/risk.py's Harvest
@@ -382,8 +384,7 @@ def fetch_forecast_hourly(lat: float, lon: float, days: int = 16, timeout: int =
         f"?latitude={lat}&longitude={lon}&forecast_days={days}"
         f"&hourly={HOURLY_FIELDS}&timezone=auto"
     )
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
-        return _json.loads(resp.read())
+    return _get_json(url, timeout)
 
 
 def parse_hourly_rows(data: dict, lat: float, lon: float) -> list:

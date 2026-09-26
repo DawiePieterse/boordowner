@@ -68,27 +68,7 @@ const LWWeatherTab = (() => {
       }
     });
 
-    // Delegated PDF export, identical mechanics to analysis-tab.js's
-    // handler - LWCharts.exportPDF() needs no changes for this chart.
-    document.getElementById("tab-weather").addEventListener("click", async (e) => {
-      const btn = e.target.closest(".chart-pdf-btn");
-      if (!btn) return;
-      const target = document.getElementById(btn.dataset.target);
-      if (!target) return;
-      const icon = btn.querySelector("i");
-      icon.className = "fa-solid fa-spinner fa-spin";
-      btn.disabled = true;
-      try {
-        const filename = `${btn.dataset.title.replace(/[^a-zA-Z0-9]+/g, "_")}.pdf`;
-        await LWCharts.exportPDF(target, { title: btn.dataset.title, filename });
-      } catch (err) {
-        console.error("PDF export failed:", err);
-        Boord.toast("Could not create PDF");
-      } finally {
-        icon.className = "fa-solid fa-file-pdf";
-        btn.disabled = false;
-      }
-    });
+    LWCharts.bindPdfButtons(document.getElementById("tab-weather"));
   }
 
   // Fetches whichever selected years are not in _pointsByYear yet, then
@@ -174,21 +154,32 @@ const LWWeatherTab = (() => {
     _fetchHistory = fetchHistory;
     if (!force && _data && Boord.isFresh(_loadedAt)) return;
     if (!_data) LWCharts.loadingState(document.getElementById("weatherChart"), "Loading the weather record...");
-    let data;
+    let result;
     try {
-      data = await fetchHistory([..._selectedYears]);
+      result = await Boord.cachedLoad("boord_cached_weather", () => fetchHistory([..._selectedYears]));
     } catch (e) {
-      if (Boord.isNetworkError(e)) { Boord.setOffline(true); return; }
+      if (Boord.isNetworkError(e)) {
+        Boord.setOffline(true);
+        Boord.setOfflineBannerText("Offline - no saved weather on this device yet");
+        return;
+      }
       console.error("Weather load failed:", e);
       Boord.toast("Could not load weather data");
       return;
     }
-    Boord.setOffline(false);
+    if (result.cached) {
+      Boord.setOffline(true);
+      Boord.setOfflineBannerText(`Offline - showing weather from ${Boord.describeAge(result.at)}`);
+    } else {
+      Boord.setOffline(false);
+    }
+    const data = result.data;
     _absorb(data);
-    _loadedAt = Date.now();
+    _loadedAt = result.cached ? 0 : Date.now();
     // The server chooses the year on a first load (the most recent it has),
-    // so adopt what it actually sent rather than assuming.
-    if (_firstLoad && data.years_returned && data.years_returned.length) {
+    // so adopt what it actually sent rather than assuming. Saved figures
+    // are whatever years were on screen when they were saved.
+    if ((_firstLoad || result.cached) && data.years_returned && data.years_returned.length) {
       _selectedYears = new Set(data.years_returned);
     }
     _rebuildFilters(data);
@@ -196,6 +187,15 @@ const LWWeatherTab = (() => {
     synced.textContent = data.last_synced
       ? `Weather data current to ${_formatSynced(data.last_synced)}`
       : "No weather data yet";
+    // Why that date might be behind: the catch-up that ran just before this
+    // response either couldn't reach the weather service, or had more to
+    // fetch than one load takes on (it works through a long gap a slice at
+    // a time - see the backend's sync_recent_weather).
+    if (data.sync && data.sync.error) {
+      synced.textContent += " - the weather service couldn't be reached just now";
+    } else if (data.sync && data.sync.complete === false) {
+      synced.textContent += " - still catching up, pull to refresh for more";
+    }
     // Hours that were downloaded for somewhere other than where the farm now
     // says it is - which only happens if the GPS was corrected after weather
     // had already been fetched. Normally absent entirely. Worth saying here

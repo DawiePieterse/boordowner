@@ -22,11 +22,9 @@ from openpyxl.utils import get_column_letter
 from sqlmodel import Session, select
 
 import config
-from db import get_boord_session, get_owner_session, own_farm_block_ids
-from models_boord import Block, HarvestRecord, SystemSetting
-from models_owner import HistoricalAnnualYield, HistoricalHarvest
-from routers.analysis import _block_sort_key
-from timeutil import day_bounds, season_year_for, to_local
+from db import get_boord_session, get_owner_session
+from models_owner import HistoricalAnnualYield
+from routers.analysis import _block_sort_key, season_day_kg
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -68,38 +66,11 @@ def historical_harvest_data_report(boord: Session = Depends(get_boord_session),
         whichever of the above covers each season, so the whole record can
         be read at once. Season Summary names each season's grain in its
         own column so the two are never silently mixed."""
-    settings = boord.exec(select(SystemSetting)).first()
-    current_year = settings.current_harvest_year if settings else date.today().year
-    anchor_month = settings.season_start_month if settings else 1
-    anchor_day = settings.season_start_day if settings else 1
-    # This farm's blocks only, and the same rule the Analysis tab uses -
-    # Boord's register can hold another grower's orchard, and a workbook
-    # titled "this farm's whole record" must not quietly contain one.
-    own_blocks = own_farm_block_ids(boord)
-    blocks = {b.id: b for b in boord.exec(select(Block)).all() if b.id in own_blocks}
-
-    day_kg: dict = {}  # (year, block_id, date) -> kg
-    estimated_blocks: set = set()
-    for h in owner.exec(select(HistoricalHarvest)).all():
-        key = (h.season_year, h.block_id, h.harvest_date)
-        day_kg[key] = day_kg.get(key, 0.0) + h.kg
-        if h.estimated:
-            estimated_blocks.add(h.block_id)
-    # Bounded to this season's anchor onward - see routers/analysis.py.
-    season_start_dt = day_bounds(date(current_year, anchor_month, anchor_day),
-                                 date(current_year, anchor_month, anchor_day))[0]
-    for r in boord.exec(select(HarvestRecord).where(HarvestRecord.timestamp >= season_start_dt)).all():
-        local_ts = to_local(r.timestamp)
-        if local_ts is None:
-            continue
-        # By the season anchor, not the calendar year - see
-        # routers/analysis.py for why the two differ.
-        if season_year_for(local_ts.date(), anchor_month, anchor_day) != current_year:
-            continue
-        if r.block_id not in own_blocks:
-            continue
-        key = (current_year, r.block_id, local_ts.date())
-        day_kg[key] = day_kg.get(key, 0.0) + (r.weight_kg - r.deduction_kg)
+    # The same per-day record the Analysis tab is built from - one
+    # definition of "this season's crates", not two.
+    season = season_day_kg(boord, owner)
+    current_year = season["current_year"]
+    blocks, day_kg, estimated_blocks = season["blocks"], season["day_kg"], season["estimated_blocks"]
 
     years = sorted({k[0] for k in day_kg})
 

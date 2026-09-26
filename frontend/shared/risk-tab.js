@@ -33,25 +33,7 @@ const LWRiskTab = (() => {
       if (_data) _renderSeason();
     });
 
-    document.getElementById("tab-risk").addEventListener("click", async (e) => {
-      const btn = e.target.closest(".chart-pdf-btn");
-      if (!btn) return;
-      const target = document.getElementById(btn.dataset.target);
-      if (!target) return;
-      const icon = btn.querySelector("i");
-      icon.className = "fa-solid fa-spinner fa-spin";
-      btn.disabled = true;
-      try {
-        const filename = `${btn.dataset.title.replace(/[^a-zA-Z0-9]+/g, "_")}.pdf`;
-        await LWCharts.exportPDF(target, { title: btn.dataset.title, filename });
-      } catch (err) {
-        console.error("PDF export failed:", err);
-        Boord.toast("Could not create PDF");
-      } finally {
-        icon.className = "fa-solid fa-file-pdf";
-        btn.disabled = false;
-      }
-    });
+    LWCharts.bindPdfButtons(document.getElementById("tab-risk"));
   }
 
   // fetchSummary: () => Promise<data> - the caller supplies the call
@@ -70,18 +52,28 @@ const LWRiskTab = (() => {
       LWCharts.loadingState(document.getElementById("riskScoreHeader"), "Scoring this season...");
       LWCharts.loadingState(document.getElementById("harvestForecastCard"), "Working out this season's forecast...");
     }
-    let data;
+    let result;
     try {
-      data = await fetchSummary();
+      result = await Boord.cachedLoad("boord_cached_risk", fetchSummary);
     } catch (e) {
-      if (Boord.isNetworkError(e)) { Boord.setOffline(true); return; }
+      if (Boord.isNetworkError(e)) {
+        Boord.setOffline(true);
+        Boord.setOfflineBannerText("Offline - no saved risk figures on this device yet");
+        return;
+      }
       console.error("Risk load failed:", e);
       Boord.toast("Could not load risk data");
       return;
     }
-    Boord.setOffline(false);
+    if (result.cached) {
+      Boord.setOffline(true);
+      Boord.setOfflineBannerText(`Offline - showing risk figures from ${Boord.describeAge(result.at)}`);
+    } else {
+      Boord.setOffline(false);
+    }
+    const data = result.data;
     _data = data;
-    _loadedAt = Date.now();
+    _loadedAt = result.cached ? 0 : Date.now();
     if (_selectedYear == null || !data.seasons.some((s) => s.year === _selectedYear)) {
       _selectedYear = data.current_year;
     }
@@ -295,9 +287,16 @@ const LWRiskTab = (() => {
         ? `<div class="text-xs text-slate-500 mb-3">Real forecast data through ${forecast.forecast_horizon_end}; beyond that, scenarios use the ${forecast.reference_label} historical range.</div>`
         : "";
 
+    // The "+12% vs avg" on each card is only meaningful next to the average
+    // itself, and how many seasons it is an average of.
+    const avgNote = forecast.reference_avg_kg != null
+      ? `<div class="text-xs text-slate-500 mb-3">${forecast.regression_label || "Historical"} average: ${Math.round(forecast.reference_avg_kg).toLocaleString()} kg over ${forecast.reference_season_count} seasons.</div>`
+      : "";
+
     cardEl.innerHTML = `
       ${horizonNote}
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">${scenarioCards}</div>
+      ${avgNote}
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
           <thead><tr class="text-left border-b text-slate-500">

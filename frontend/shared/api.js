@@ -10,17 +10,12 @@ const Boord = {
   // it's obvious whether a device's cached copy is up to date.
   VERSION: "1.5.4",
 
-  getLastReceivedBy() { return localStorage.getItem("boord_last_received_by") || ""; },
-  setLastReceivedBy(name) { localStorage.setItem("boord_last_received_by", name); },
-
   // A device whose WiFi is up but that cannot actually reach the farm server
   // gets no error from fetch() - the request just hangs until the OS gives up,
   // which can be minutes. Every request is therefore given a deadline, and a
   // blown deadline is reported as a normal network failure so callers fall
   // back to cached data instead of waiting.
   NETWORK_TIMEOUT_MS: 8000,
-  // File transfers are legitimately slow; they opt into a longer deadline.
-  UPLOAD_TIMEOUT_MS: 120000,
 
   async _fetchWithTimeout(url, options = {}, timeoutMs) {
     const limit = timeoutMs || Boord.NETWORK_TIMEOUT_MS;
@@ -48,6 +43,47 @@ const Boord = {
 
   isFresh(loadedAt) {
     return !!loadedAt && Date.now() - loadedAt < Boord.TAB_FRESH_MS;
+  },
+
+  // Runs fetchFn and keeps its result under `key`; when the server can't be
+  // reached, hands back the last result instead. Resolves to
+  // {data, cached, at} - `cached` true means the figures are the saved
+  // ones, from `at`. Any other failure (a 500, a bad response) rejects as
+  // usual, and so does a network failure with nothing saved. The
+  // analytical tabs change at most daily, so an owner away from the farm
+  // still sees the last known picture rather than a blank tab.
+  async cachedLoad(key, fetchFn) {
+    try {
+      const data = await fetchFn();
+      try {
+        localStorage.setItem(key, JSON.stringify({ at: Date.now(), data }));
+      } catch (e) { /* out of quota - the live figures still render */ }
+      return { data, cached: false, at: Date.now() };
+    } catch (e) {
+      if (Boord.isNetworkError(e)) {
+        const saved = Boord.getCachedJSON(key);
+        if (saved && saved.data) return { data: saved.data, cached: true, at: saved.at };
+      }
+      throw e;
+    }
+  },
+
+  // "moments ago" / "12 min ago" / "3 hours ago" / a full date-time.
+  describeAge(at) {
+    const mins = Math.round((Date.now() - at) / 60000);
+    if (mins < 1) return "moments ago";
+    if (mins < 60) return `${mins} min ago`;
+    const hours = Math.round(mins / 60);
+    if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+    return Boord.fmtDateTime(new Date(at));
+  },
+
+  // Updates the offline banner's text in place. offlineBanner() re-registers
+  // its online/offline listeners on every call, so it must not be called
+  // again just to change the wording.
+  setOfflineBannerText(message) {
+    const el = document.getElementById("boord-offline-banner");
+    if (el) el.innerHTML = `<i class="fa-solid fa-wifi"></i> ${message}`;
   },
 
   isNetworkError(e) {
@@ -199,29 +235,6 @@ const Boord = {
     el._timer = setTimeout(() => el.classList.remove("show"), 2200);
   },
 
-  // Short synthesized tones (no audio files needed, works fully offline).
-  // Two distinct patterns so a worker can tell them apart by ear:
-  // a single beep for a QR match, a two-note rising chime for a saved crate.
-  _tone(frequency, duration, delay = 0) {
-    try {
-      const ctx = Boord._audioCtx || (Boord._audioCtx = new (window.AudioContext || window.webkitAudioContext)());
-      if (ctx.state === "suspended") ctx.resume();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.value = frequency;
-      const startAt = ctx.currentTime + delay;
-      gain.gain.setValueAtTime(0.2, startAt);
-      gain.gain.exponentialRampToValueAtTime(0.001, startAt + duration);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(startAt);
-      osc.stop(startAt + duration);
-    } catch (e) { /* audio isn't critical - never block the capture flow on it */ }
-  },
-  beepScanned() { Boord._tone(880, 0.12); },
-  beepSaved() { Boord._tone(660, 0.09); Boord._tone(988, 0.14, 0.1); },
-
   // Wires a Today/Week/Season button group to a pair of date inputs: clicking
   // a button sets the inputs and highlights that button; editing a date input
   // directly clears the highlight since the selection no longer matches a preset.
@@ -278,14 +291,5 @@ const Boord = {
     a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
-  },
-
-  uuid() {
-    if (crypto.randomUUID) return crypto.randomUUID();
-    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-      const r = (Math.random() * 16) | 0;
-      const v = c === "x" ? r : (r & 0x3) | 0x8;
-      return v.toString(16);
-    });
   },
 };

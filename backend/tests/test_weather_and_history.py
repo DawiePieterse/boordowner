@@ -307,3 +307,142 @@ def test_history_falls_back_to_the_default_when_no_year_asked_for_is_on_file(
     body = client.get("/api/weather/history?years=1901").json()
     assert body["years_returned"] == [2025], "the same default a fresh tab gets"
     assert {p["year"] for p in body["points"]} == {2025}
+
+
+# --------------------------------------------------------------------------- #
+# Daily aggregation values (build_weather_history)
+# --------------------------------------------------------------------------- #
+def test_history_daily_aggregates_are_the_right_statistic(client, farm_has_gps, monkeypatch):
+    """Each metric in routers/weather._METRICS is a different statistic over
+    the day's 24 hours - mean, daily max/min, sum, seconds->hours. One day
+    of known hourly values pins every one of them."""
+    monkeypatch.setattr(weather_module, "fetch_historical_hourly",
+                        lambda *a, **k: {"hourly": {"time": []}})
+    with Session(owner_engine) as s:
+        for h in range(24):
+            s.add(WeatherHistory(timestamp=datetime(2025, 7, 1, h), temp_c=10.0 + h,
+                                 precipitation_mm=0.5, sunshine_duration_s=1800.0,
+                                 uv_index=float(h % 5), lat=-34.0, lon=18.5))
+        s.commit()
+    body = client.get("/api/weather/history?years=2025").json()
+    assert len(body["points"]) == 1
+    p = body["points"][0]
+    assert p["date"] == "2025-07-01"
+    assert p["temp_c"] == 21.5          # mean of 10..33
+    assert p["temp_max_c"] == 33.0
+    assert p["temp_min_c"] == 10.0
+    assert p["precipitation_mm"] == 12.0  # 24 x 0.5, summed
+    assert p["sunshine_hours"] == 12.0    # 24 x 1800s -> hours
+    assert p["uv_index"] == 4.0           # the day's peak, not its mean
+    assert {m["key"] for m in body["metrics"]} >= {"temp_c", "temp_max_c", "temp_min_c"}
+    # The catch-up that ran first reports what it did: nothing to add (the
+    # fake answers no hours), and a gap far wider than one call covers.
+    assert body["sync"] == {"synced": 0, "complete": False}
+
+
+# --------------------------------------------------------------------------- #
+# sync_recent_weather happy paths
+# --------------------------------------------------------------------------- #
+def _sync():
+    with Session(owner_engine) as owner, Session(boord_engine) as boord:
+        return weather_module.sync_recent_weather(owner, boord)
+
+
+def _recording_fetch(monkeypatch, hours_per_call=24):
+    """Stands in for fetch_historical_hourly: records each (start, end) it
+    was asked for and answers with `hours_per_call` hours from `start`."""
+    calls = []
+
+    def fake(lat, lon, start_date, end_date, timeout=120):
+        calls.append((start_date, end_date))
+        return _hourly_payload(datetime.fromisoformat(start_date), hours_per_call)
+    monkeypatch.setattr(weather_module, "fetch_historical_hourly", fake)
+    return calls
+
+
+def test_sync_skips_the_fetch_when_the_current_hour_is_already_stored(client, farm_has_gps, monkeypatch):
+    """Data is hourly, so a row in the current hour means nothing newer
+    exists to fetch - that is the whole throttle on repeat tab opens."""
+    calls = _recording_fetch(monkeypatch)
+    this_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+    with Session(owner_engine) as s:
+        s.add(WeatherHistory(timestamp=this_hour, temp_c=20.0, lat=-34.0, lon=18.5))
+        s.commit()
+    assert _sync() == {"synced": 0}
+    assert calls == []
+
+
+def test_sync_refuses_to_append_to_another_locations_history(client, farm_has_gps, monkeypatch):
+    calls = _recording_fetch(monkeypatch)
+    with Session(owner_engine) as s:
+        s.add(WeatherHistory(timestamp=datetime.now() - timedelta(days=3), temp_c=20.0,
+                             lat=-20.0, lon=25.0))   # not where the farm is now
+        s.commit()
+    assert _sync() == {"synced": 0, "location_changed": True}
+    assert calls == []
+
+
+def test_sync_appends_only_hours_newer_than_the_latest_stored(client, farm_has_gps, monkeypatch):
+    """The fetch starts on the latest stored DAY (the API is day-granular),
+    so it returns hours already on file; only the newer ones may land."""
+    calls = _recording_fetch(monkeypatch, hours_per_call=24)
+    latest = (datetime.now() - timedelta(days=1)).replace(hour=6, minute=0, second=0, microsecond=0)
+    with Session(owner_engine) as s:
+        s.add(WeatherHistory(timestamp=latest, temp_c=20.0, lat=-34.0, lon=18.5))
+        s.commit()
+    result = _sync()
+    # The fake answers 24 hours from the latest stored day's midnight: hours
+    # 00:00-06:00 are already on file (7 rows), 07:00-23:00 are new.
+    assert result == {"synced": 17}
+    assert calls[0][0] == latest.date().isoformat()
+    with Session(owner_engine) as s:
+        rows = s.exec(select(WeatherHistory).order_by(WeatherHistory.timestamp)).all()
+        assert len(rows) == 18
+        assert rows[0].timestamp == latest
+        assert all(r.timestamp > latest for r in rows[1:])
+
+
+def test_sync_catches_up_a_long_gap_in_bounded_chunks(client, farm_has_gps, monkeypatch):
+    """A server that has been off for months used to ask for the whole gap
+    in one short-timeout call, which never returned in time - so the gap
+    never closed. It is fetched in SYNC_CHUNK_DAYS slices, a few per call,
+    each landing before the next is asked for."""
+    calls = _recording_fetch(monkeypatch, hours_per_call=24)
+    latest = (datetime.now() - timedelta(days=100)).replace(hour=23, minute=0, second=0, microsecond=0)
+    with Session(owner_engine) as s:
+        s.add(WeatherHistory(timestamp=latest, temp_c=20.0, lat=-34.0, lon=18.5))
+        s.commit()
+    result = _sync()
+    assert len(calls) == weather_module.SYNC_MAX_CHUNKS_PER_CALL
+    spans = [(datetime.fromisoformat(e) - datetime.fromisoformat(s)).days + 1 for s, e in calls]
+    assert all(span == weather_module.SYNC_CHUNK_DAYS for span in spans)
+    # Consecutive, gap-free slices starting on the latest stored day.
+    assert calls[0][0] == latest.date().isoformat()
+    for (_, end), (next_start, _) in zip(calls, calls[1:]):
+        assert datetime.fromisoformat(next_start).date() == datetime.fromisoformat(end).date() + timedelta(days=1)
+    # 3 x 31 days < 100: more to come on the next tab open, and it says so.
+    assert result["complete"] is False
+    assert result["synced"] > 0
+
+
+def test_sync_keeps_what_landed_before_a_failure_and_backs_off(client, farm_has_gps, monkeypatch):
+    calls = []
+
+    def flaky(lat, lon, start_date, end_date, timeout=120):
+        calls.append(start_date)
+        if len(calls) == 2:
+            raise OSError("network down")
+        return _hourly_payload(datetime.fromisoformat(start_date), 24)
+    monkeypatch.setattr(weather_module, "fetch_historical_hourly", flaky)
+    latest = (datetime.now() - timedelta(days=100)).replace(hour=0, minute=0, second=0, microsecond=0)
+    with Session(owner_engine) as s:
+        s.add(WeatherHistory(timestamp=latest, temp_c=20.0, lat=-34.0, lon=18.5))
+        s.commit()
+    result = _sync()
+    assert result == {"synced": 23, "error": True}   # slice 1's 23 new hours stayed
+    with Session(owner_engine) as s:
+        assert len(s.exec(select(WeatherHistory)).all()) == 24
+    # ...and the next call inside the backoff window doesn't touch the network.
+    assert _sync() == {"synced": 0, "error": True}
+    assert len(calls) == 2
+    weather_module._sync_failed_until = 0.0

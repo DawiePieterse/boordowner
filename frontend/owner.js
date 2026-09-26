@@ -38,14 +38,31 @@ async function updateBannerWeather() {
       // backend/weather.py) - Open-Meteo's /current call here never returns
       // it, so its presence is exactly "an on-farm reading exists".
       const rainText = w.rain_today_mm ? ` · ${w.rain_today_mm}mm today` : "";
-      el.innerHTML = `<i class="fa-solid ${icon}"></i> ${Math.round(w.temp)}°C${conditionText}${humidityText}${rainText}`;
+      // Wind, likewise station-only - and the reading that decides whether
+      // today is a spraying day.
+      const windText = w.wind_avg_kmh != null
+        ? ` · wind ${Math.round(w.wind_avg_kmh)}${w.wind_gust_kmh != null ? `-${Math.round(w.wind_gust_kmh)}` : ""} km/h`
+        : "";
+      el.innerHTML = `<i class="fa-solid ${icon}"></i> ${Math.round(w.temp)}°C${conditionText}${humidityText}${rainText}${windText}`;
     }
   } catch (e) { /* nice-to-have only */ }
+}
+
+// Opens a collapsible section (Harvesting, say) unless the person has
+// already toggled it themselves this visit - their choice wins over ours.
+function openCollapsible(bodyId) {
+  const body = document.getElementById(bodyId);
+  const btn = document.querySelector(`.collapsible-header[data-target="${bodyId}"]`);
+  if (!body || !btn || btn.dataset.userToggled) return;
+  body.classList.remove("hidden");
+  const icon = btn.querySelector(".fa-chevron-down");
+  if (icon) { icon.classList.remove("fa-chevron-down"); icon.classList.add("fa-chevron-up"); }
 }
 
 function bindCollapsibles() {
   document.querySelectorAll(".collapsible-header").forEach((btn) => {
     btn.addEventListener("click", () => {
+      btn.dataset.userToggled = "1";
       document.getElementById(btn.dataset.target).classList.toggle("hidden");
       const icon = btn.querySelector(".fa-chevron-down, .fa-chevron-up");
       if (icon) { icon.classList.toggle("fa-chevron-down"); icon.classList.toggle("fa-chevron-up"); }
@@ -168,6 +185,10 @@ function bindDashboard() {
     onChange: refreshDashboard,
   });
   document.getElementById("dashSupplierFilter").addEventListener("change", refreshDashboard);
+  // Dates typed by hand reload too - only the preset buttons used to, so a
+  // custom range sat there showing the previous period's figures.
+  document.getElementById("dashStart").addEventListener("change", refreshDashboard);
+  document.getElementById("dashEnd").addEventListener("change", refreshDashboard);
 }
 
 function renderSupplierOptions(suppliers) {
@@ -235,21 +256,9 @@ function cacheDashboard(qs, harvesting, inTransit, received, summary) {
   }
 }
 
-function describeAge(at) {
-  const mins = Math.round((Date.now() - at) / 60000);
-  if (mins < 1) return "moments ago";
-  if (mins < 60) return `${mins} min ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
-  return Boord.fmtDateTime(new Date(at));
-}
-
-// Updates the banner text in place. Boord.offlineBanner() re-registers its
-// online/offline listeners on every call, so it must not be called again.
-function setOfflineBannerText(message) {
-  const el = document.getElementById("boord-offline-banner");
-  if (el) el.innerHTML = `<i class="fa-solid fa-wifi"></i> ${message}`;
-}
+// Shared with the other tabs' offline fallbacks - see shared/api.js.
+const describeAge = Boord.describeAge;
+const setOfflineBannerText = Boord.setOfflineBannerText;
 
 // Paints the last figures this device saw, but only if they belong to the
 // period now selected. Returns whether anything was drawn.
@@ -314,11 +323,45 @@ async function refreshDashboard() {
   cacheDashboard(qs, harvesting, inTransit, received, summary);
 }
 
+// Whole kilograms with thousands separators - "12,346 kg", the same way
+// Analysis and Risk print them. Per-crate averages keep one decimal.
+function fmtKg(v) {
+  return `${v.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg`;
+}
+
+// The lot colours (see styles.css .urgency-*) mean minutes since the lot
+// was opened, against Boord's own thresholds - said once above the lists
+// rather than left for the owner to guess.
+function urgencyLegend() {
+  const s = _systemSettings || {};
+  const g = s.green_to_yellow_minutes, y = s.yellow_to_red_minutes;
+  if (!g || !y) return "";
+  return `<div class="p-2 text-[11px] text-slate-500 flex flex-wrap gap-x-3">
+    <span><span class="inline-block w-2.5 h-2.5 rounded-sm align-middle" style="background:#16a34a"></span> under ${g} min</span>
+    <span><span class="inline-block w-2.5 h-2.5 rounded-sm align-middle" style="background:#eab308"></span> ${g}-${y} min</span>
+    <span><span class="inline-block w-2.5 h-2.5 rounded-sm align-middle" style="background:#C8102E"></span> over ${y} min since the lot was opened</span>
+  </div>`;
+}
+
 function renderDashboardKpis(harvesting, inTransit, received, summary) {
   const h = _lotTotals(harvesting);
   const t = _lotTotals(inTransit);
   const r = _lotTotals(received);
   const allLots = [...harvesting, ...inTransit, ...received];
+  const grid = document.getElementById("dashKpiGrid");
+
+  // Outside picking hours the default (Today) view is genuinely empty. Ten
+  // zero cards read as "broken"; one line that says what to do doesn't.
+  if (!allLots.length && !summary.workers.length) {
+    const seasonBtn = document.getElementById("dashSeasonBtn");
+    const onToday = !seasonBtn || !seasonBtn.classList.contains("active");
+    grid.innerHTML = `
+      <div class="bg-white rounded-xl shadow p-4 col-span-full text-sm text-slate-500">
+        No picking recorded for this period${onToday ? " yet - tap <b>Season</b> for the season to date" : ""}.
+      </div>`;
+    return;
+  }
+
   const totalCrates = h.crates + t.crates + r.crates;
   const totalKg = h.kg + t.kg + r.kg;
   const avgKgPerLot = allLots.length ? totalKg / allLots.length : 0;
@@ -328,16 +371,16 @@ function renderDashboardKpis(harvesting, inTransit, received, summary) {
     ["Teams Active", `${summary.active_teams} teams`],
     ["Workers Active", `${summary.active_workers} workers`],
     ["Blocks Active", `${summary.active_blocks} blocks`],
-    ["Total Kg", `${totalKg.toFixed(1)} kg`],
-    ["Total Crates", `${totalCrates} crates`],
-    ["Avg Kg/Lot", avgKgPerLot.toFixed(1)],
+    ["Total Kg", fmtKg(totalKg)],
+    ["Total Crates", `${totalCrates.toLocaleString()} crates`],
+    ["Avg Kg/Lot", avgKgPerLot.toFixed(1), "average net kg per lot (slip) in this period"],
     ["Avg Kg/Crate", avgKgPerCrate.toFixed(1)],
-    ["Harvesting", `${h.crates} crates / ${h.kg.toFixed(1)} kg`],
-    ["In Transit", `${t.crates} crates / ${t.kg.toFixed(1)} kg`],
-    ["Received", `${r.crates} crates / ${r.kg.toFixed(1)} kg`],
+    ["Harvesting", `${h.crates} crates / ${fmtKg(h.kg)}`],
+    ["In Transit", `${t.crates} crates / ${fmtKg(t.kg)}`],
+    ["Received", `${r.crates} crates / ${fmtKg(r.kg)}`],
   ];
-  document.getElementById("dashKpiGrid").innerHTML = cards.map(([label, value]) => `
-    <div class="bg-white rounded-xl shadow p-4">
+  grid.innerHTML = cards.map(([label, value, hint]) => `
+    <div class="bg-white rounded-xl shadow p-4"${hint ? ` title="${hint}"` : ""}>
       <div class="text-xs text-slate-500">${label}</div>
       <div class="text-xl font-bold">${value}</div>
     </div>
@@ -349,29 +392,29 @@ function renderDashboardLists(harvesting, inTransit, received, summary) {
   const t = _lotTotals(inTransit);
   const r = _lotTotals(received);
 
-  document.getElementById("dash-harvesting-title").textContent = `Harvesting - ${h.crates} crates / ${h.kg.toFixed(1)} kg`;
-  document.getElementById("dash-harvesting-body").innerHTML = harvesting.map((l) => `
-    <div class="p-3 urgency-${l.urgency}">
+  const lotLine = (l, when) => `
+    <div class="p-3${l.urgency ? ` urgency-${l.urgency}` : ""}">
       <div class="font-semibold text-sm">${l.slip_number} <span class="text-xs font-normal text-slate-500">${l.supplier_name}</span></div>
-      <div class="text-sm">${l.total_crates} crates / ${l.total_kg.toFixed(1)} kg - ${l.age_minutes} min ago</div>
-    </div>
-  `).join("") || `<div class="p-3 text-sm text-slate-400">Nothing currently being harvested</div>`;
+      <div class="text-sm">${l.total_crates} crates / ${fmtKg(l.total_kg)} - ${when}</div>
+    </div>`;
 
-  document.getElementById("dash-intransit-title").textContent = `In transit - ${t.crates} crates / ${t.kg.toFixed(1)} kg`;
-  document.getElementById("dash-intransit-body").innerHTML = inTransit.map((l) => `
-    <div class="p-3 urgency-${l.urgency}">
-      <div class="font-semibold text-sm">${l.slip_number} <span class="text-xs font-normal text-slate-500">${l.supplier_name}</span></div>
-      <div class="text-sm">${l.total_crates} crates / ${l.total_kg.toFixed(1)} kg - ${l.age_minutes} min ago</div>
-    </div>
-  `).join("") || `<div class="p-3 text-sm text-slate-400">Nothing currently in transit</div>`;
+  document.getElementById("dash-harvesting-title").textContent = `Harvesting - ${h.crates} crates / ${fmtKg(h.kg)}`;
+  document.getElementById("dash-harvesting-body").innerHTML = harvesting.length
+    ? urgencyLegend() + harvesting.map((l) => lotLine(l, `${l.age_minutes} min ago`)).join("")
+    : `<div class="p-3 text-sm text-slate-400">Nothing currently being harvested</div>`;
+  // The live list is what an owner opens the page for: show it without a
+  // tap when there is anything in it.
+  if (harvesting.length) openCollapsible("dash-harvesting-body");
 
-  document.getElementById("dash-received-title").textContent = `Received - ${r.crates} crates / ${r.kg.toFixed(1)} kg`;
-  document.getElementById("dash-received-body").innerHTML = received.map((l) => `
-    <div class="p-3">
-      <div class="font-semibold text-sm">${l.slip_number} <span class="text-xs font-normal text-slate-500">${l.supplier_name}</span></div>
-      <div class="text-sm">${l.total_crates} crates / ${l.total_kg.toFixed(1)} kg - received ${Boord.fmtDateTime(l.received_at)}</div>
-    </div>
-  `).join("") || `<div class="p-3 text-sm text-slate-400">Nothing received in this period</div>`;
+  document.getElementById("dash-intransit-title").textContent = `In transit - ${t.crates} crates / ${fmtKg(t.kg)}`;
+  document.getElementById("dash-intransit-body").innerHTML = inTransit.length
+    ? urgencyLegend() + inTransit.map((l) => lotLine(l, `${l.age_minutes} min ago`)).join("")
+    : `<div class="p-3 text-sm text-slate-400">Nothing currently in transit</div>`;
+
+  document.getElementById("dash-received-title").textContent = `Received - ${r.crates} crates / ${fmtKg(r.kg)}`;
+  document.getElementById("dash-received-body").innerHTML = received.map((l) =>
+    lotLine({ ...l, urgency: null }, `received ${Boord.fmtDateTime(l.received_at)}`)).join("")
+    || `<div class="p-3 text-sm text-slate-400">Nothing received in this period</div>`;
 
   document.getElementById("dash-workers-title").textContent = `Workers - ${summary.workers.length} workers`;
   document.getElementById("dash-workers-rows").innerHTML = summary.workers.map((w) => `
@@ -380,7 +423,7 @@ function renderDashboardLists(harvesting, inTransit, received, summary) {
       <td class="p-2">${w.name}</td>
       <td class="p-2">${w.supplier_name}</td>
       <td class="p-2">${w.crates}</td>
-      <td class="p-2">${w.total_kg.toFixed(1)}</td>
+      <td class="p-2">${w.total_kg.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
       <td class="p-2">${w.avg_kg_crate.toFixed(1)}</td>
     </tr>
   `).join("") || `<tr><td class="p-2 text-slate-400" colspan="6">No harvest activity in this period</td></tr>`;
@@ -390,7 +433,7 @@ function renderDashboardLists(harvesting, inTransit, received, summary) {
     <tr class="border-b">
       <td class="p-2">${b.name}</td>
       <td class="p-2">${b.crates}</td>
-      <td class="p-2">${b.total_kg.toFixed(1)}</td>
+      <td class="p-2">${b.total_kg.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
       <td class="p-2">${b.avg_kg_crate.toFixed(1)}</td>
       <td class="p-2">${b.avg_kg_tree != null ? b.avg_kg_tree.toFixed(1) : "-"}</td>
       <td class="p-2">${b.avg_kg_hectare != null ? b.avg_kg_hectare.toFixed(1) : "-"}</td>

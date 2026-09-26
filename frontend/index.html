@@ -126,7 +126,7 @@
       <div class="bg-white rounded-xl shadow p-4">
         <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
           <div class="font-semibold">Season Pace - cumulative kg vs history</div>
-          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="seasonPaceExport" data-title="Season Pace" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="seasonPaceExport" data-title="Season Pace" title="Download as PDF" aria-label="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
         </div>
         <div class="text-xs text-slate-500 mb-2">How this season's cumulative harvest compares to each prior year and the 5-year average, day by day.</div>
         <div id="seasonPaceExport">
@@ -143,7 +143,7 @@
               <option value="kg_ha">Kg / Hectare</option>
               <option value="kg_tree">Kg / Tree</option>
             </select>
-            <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="blockYieldChart" data-title="Per-Block Yield" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+            <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="blockYieldChart" data-title="Per-Block Yield" title="Download as PDF" aria-label="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
           </div>
         </div>
         <div class="text-xs text-slate-500 mb-2">Which blocks are over- or under-performing their own history, normalized for block size.</div>
@@ -151,7 +151,7 @@
         <div class="overflow-x-auto mt-3">
           <table class="w-full text-sm">
             <thead><tr class="text-left border-b">
-              <th class="p-2">Block</th><th class="p-2">Variety</th>
+              <th class="p-2">Block</th><th class="p-2">Variety</th><th class="p-2">Ha</th><th class="p-2">Trees</th>
               <th class="p-2" id="blockYieldCol1">This Season Kg/Ha</th><th class="p-2" id="blockYieldCol2">Historical Avg Kg/Ha</th><th class="p-2">vs Average</th>
             </tr></thead>
             <tbody id="blockYieldRows"></tbody>
@@ -162,7 +162,7 @@
       <div class="bg-white rounded-xl shadow p-4">
         <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
           <div class="font-semibold">Harvest Volume by Block and Season</div>
-          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="blockSeasonBubbleChart" data-title="Harvest Volume by Block and Season" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="blockSeasonBubbleChart" data-title="Harvest Volume by Block and Season" title="Download as PDF" aria-label="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
         </div>
         <div class="text-xs text-slate-500 mb-2">Bubble size = kg harvested - which blocks and seasons produced the most, at a glance.</div>
         <div id="blockSeasonBubbleChart" class="overflow-x-auto"></div>
@@ -176,7 +176,7 @@
               <option value="kg_tree">Kg / Tree</option>
               <option value="kg_ha">Kg / Hectare</option>
             </select>
-            <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="yieldPerTreeHeatmap" data-title="Yield per Block and Season" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+            <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="yieldPerTreeHeatmap" data-title="Yield per Block and Season" title="Download as PDF" aria-label="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
           </div>
         </div>
         <div class="text-xs text-slate-500 mb-2">Every block against every season - scan for blocks or years running consistently high or low.</div>
@@ -188,7 +188,7 @@
           <div class="font-semibold">Variety Performance Over Time</div>
           <div class="flex items-center gap-2">
             <select id="varietyFilter" class="border border-slate-300 rounded-lg p-1.5 text-sm"></select>
-            <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="varietyYieldExport" data-title="Variety Performance Over Time" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+            <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="varietyYieldExport" data-title="Variety Performance Over Time" title="Download as PDF" aria-label="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
           </div>
         </div>
         <div class="text-xs text-slate-500 mb-2">Average kg per tree per variety, by season - spot varieties trending up or down.</div>
@@ -200,7 +200,7 @@
       <div class="bg-white rounded-xl shadow p-4">
         <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
           <div class="font-semibold">Harvest Season Length (first pick &rarr; last pick)</div>
-          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="seasonLengthChart" data-title="Harvest Season Length" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="seasonLengthChart" data-title="Harvest Season Length" title="Download as PDF" aria-label="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
         </div>
         <div class="text-xs text-slate-500 mb-2">When picking started and ended each season, and how many of those days actually had picking.</div>
         <div id="seasonLengthChart" class="overflow-x-auto"></div>
@@ -209,7 +209,7 @@
       <div class="bg-white rounded-xl shadow p-4">
         <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
           <div class="font-semibold">Monthly Harvest Volume</div>
-          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="monthlyHeatmap" data-title="Monthly Harvest Volume" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="monthlyHeatmap" data-title="Monthly Harvest Volume" title="Download as PDF" aria-label="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
         </div>
         <div class="text-xs text-slate-500 mb-2">Kg picked by month, every season, with each month's share of that season's total.</div>
         <div id="monthlyHeatmap" class="overflow-x-auto"></div>
@@ -226,7 +226,7 @@
       <div class="bg-white rounded-xl shadow p-4">
         <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
           <div class="font-semibold">Historical Weather</div>
-          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="weatherChartExport" data-title="Historical Weather" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="weatherChartExport" data-title="Historical Weather" title="Download as PDF" aria-label="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
         </div>
         <div class="text-xs text-slate-500 mb-2" id="weatherLastSynced"></div>
 
@@ -275,7 +275,7 @@
       <div class="bg-white rounded-xl shadow p-4">
         <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
           <div class="font-semibold">Risk Score by Season</div>
-          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="riskScoreChartExport" data-title="Risk Score by Season" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="riskScoreChartExport" data-title="Risk Score by Season" title="Download as PDF" aria-label="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
         </div>
         <div class="text-xs text-slate-500 mb-2">Back-tested against every season on file: does a higher score line up with a poorer harvest that year? (* = current season, may still be partial)</div>
         <div id="riskScoreChartExport">
@@ -286,7 +286,7 @@
       <div class="bg-white rounded-xl shadow p-4">
         <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
           <div class="font-semibold">Actual Harvest by Season</div>
-          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="riskKgChartExport" data-title="Actual Harvest by Season" title="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="riskKgChartExport" data-title="Actual Harvest by Season" title="Download as PDF" aria-label="Download as PDF"><i class="fa-solid fa-file-pdf"></i></button>
         </div>
         <div id="riskKgChartExport">
           <div id="riskKgChart" class="overflow-x-auto"></div>

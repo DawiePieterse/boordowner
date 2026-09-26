@@ -32,18 +32,25 @@ def current_weather(boord: Session = Depends(get_boord_session)):
 
 # ---------------------------------------------------------------------------
 # Weather tab: daily-aggregated history. GET /history is what the Weather tab
-# loads; POST /history/backfill rebuilds the stored record wholesale and is
-# manager-only.
+# loads; POST /history/backfill rebuilds the stored record wholesale. There
+# is no sign-in in this app (see README's Access section), so the backfill is
+# reachable by anyone on the tailnet - the setup wizard offers it.
 # ---------------------------------------------------------------------------
 
 # key -> (source column on WeatherHistory, aggregation, unit, decimals).
-# agg is one of "mean"/"sum"/"max", applied over a calendar day's hourly
-# rows. uv_index uses the day's peak (not a mean - "how strong did it get")
-# and sunshine_duration_s is summed then converted seconds->hours for a
-# legible unit. weather_code/condition are categorical, not chartable as a
-# line, so they're deliberately left out of this registry.
+# agg is one of "mean"/"sum"/"max"/"min", applied over a calendar day's
+# hourly rows. Temperature is offered three ways: the day's mean, and its
+# max and min - the afternoon peak and the overnight low are what a grower
+# watches for heat stress and frost, and the Risk tab's Fruit Development
+# Warmth driver is itself a mean of daily MAXIMA, which a mean-only chart
+# could never show. uv_index uses the day's peak (not a mean - "how strong
+# did it get") and sunshine_duration_s is summed then converted
+# seconds->hours for a legible unit. weather_code/condition are categorical,
+# not chartable as a line, so they're deliberately left out of this registry.
 _METRICS = [
-    {"key": "temp_c", "label": "Temperature", "source": "temp_c", "agg": "mean", "unit": "°C", "decimals": 1},
+    {"key": "temp_c", "label": "Temperature (mean)", "source": "temp_c", "agg": "mean", "unit": "°C", "decimals": 1},
+    {"key": "temp_max_c", "label": "Temperature (daily max)", "source": "temp_c", "agg": "max", "unit": "°C", "decimals": 1},
+    {"key": "temp_min_c", "label": "Temperature (daily min)", "source": "temp_c", "agg": "min", "unit": "°C", "decimals": 1},
     {"key": "humidity_pct", "label": "Humidity", "source": "humidity_pct", "agg": "mean", "unit": "%", "decimals": 0},
     {"key": "dew_point_c", "label": "Dew Point", "source": "dew_point_c", "agg": "mean", "unit": "°C", "decimals": 1},
     {"key": "precipitation_mm", "label": "Precipitation", "source": "precipitation_mm", "agg": "sum", "unit": "mm", "decimals": 1},
@@ -73,7 +80,7 @@ def _years_on_file(owner: Session) -> list:
 
 
 def build_weather_history(owner: Session, boord: Session,
-                          years: Optional[list] = None) -> dict:
+                          years: Optional[list] = None, sync: Optional[dict] = None) -> dict:
     """Daily-aggregated WeatherHistory for the Weather tab - see _METRICS
     for per-metric aggregation. Grouped by plain calendar year (1 Jan -
     31 Dec), deliberately NOT the Aug-anchored harvest season used
@@ -119,7 +126,7 @@ def build_weather_history(owner: Session, boord: Session,
     aggregates = []
     for m in _METRICS:
         col = getattr(WeatherHistory, m["source"])
-        agg = {"mean": func.avg, "sum": func.sum, "max": func.max}[m["agg"]]
+        agg = {"mean": func.avg, "sum": func.sum, "max": func.max, "min": func.min}[m["agg"]]
         aggregates.append(agg(col))
 
     query = select(day, *aggregates)
@@ -160,6 +167,10 @@ def build_weather_history(owner: Session, boord: Session,
         "years_returned": wanted,
         "current_year": date.today().year,
         "last_synced": last_synced.isoformat() if last_synced else None,
+        # What the catch-up that ran just before this did (see
+        # weather.sync_recent_weather) - so the tab can say WHY last_synced
+        # is drifting instead of leaving it to drift silently.
+        "sync": sync,
         "hours_elsewhere": hours_elsewhere,
         "points": points,
     }
@@ -185,8 +196,8 @@ def weather_history(years: Optional[str] = Query(
         part = part.strip()
         if part.isdigit():
             wanted.append(int(part))
-    sync_recent_weather(owner, boord)
-    return build_weather_history(owner, boord, years=wanted or None)
+    sync = sync_recent_weather(owner, boord)
+    return build_weather_history(owner, boord, years=wanted or None, sync=sync)
 
 
 @router.post("/history/backfill")

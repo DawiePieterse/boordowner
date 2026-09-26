@@ -6,7 +6,7 @@ from sqlmodel import Session, select
 
 from db import get_boord_session, get_owner_session, own_farm_block_ids
 from models_boord import Block, HarvestRecord, SystemSetting
-from models_owner import HistoricalHarvest
+from models_owner import HistoricalAnnualYield, HistoricalHarvest
 from timeutil import day_bounds, season_day, season_year_for, to_local
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
@@ -29,22 +29,17 @@ def analysis_summary(boord: Session = Depends(get_boord_session),
     return build_analysis_summary(boord, owner)
 
 
-def build_analysis_summary(boord: Session, owner: Session) -> dict:
-    """Historical (2020-2025, from HistoricalHarvest) vs current-season
-    (from HarvestRecord) comparisons for the Analysis tab: season pace,
-    per-block/variety yield, season length, and monthly totals. Aggregated
-    in Python over the full table - fine at this farm's data volume, and
-    keeps the split-block/typo handling (baked into HistoricalHarvest at
-    import time) out of SQL.
+def season_day_kg(boord: Session, owner: Session) -> dict:
+    """The per-day kg record every season view is built from: HistoricalHarvest
+    for the daily-tracked past seasons plus this season's HarvestRecord
+    crates, keyed (season_year, block_id, date), this farm's own blocks only.
+    Shared by build_analysis_summary() and the Historical Harvest Data
+    workbook (routers/historical_report.py) so the two can't drift on which
+    crates count as this season's - they used to carry their own copies.
 
-    Covers this farm's own blocks only (db.own_farm_block_ids) - Boord's
-    block register can hold another grower's orchard, and HistoricalHarvest
-    has history for this farm alone, so mixing the two would compare this
-    season against a past that isn't its own.
-
-    `boord` supplies SystemSetting / Block / HarvestRecord (Boord's live
-    database, read-only); `owner` supplies HistoricalHarvest (this app's
-    own database)."""
+    Returns current_year, the season anchor (month/day), blocks (own blocks
+    only, by id), day_kg and estimated_blocks (blocks with at least one
+    hectare-ratio-split historical row)."""
     settings = boord.exec(select(SystemSetting)).first()
     current_year = settings.current_harvest_year if settings else date.today().year
     # Where a season starts. Boord owns this (SystemSetting.season_start_month
@@ -98,6 +93,31 @@ def build_analysis_summary(boord: Session, owner: Session) -> dict:
         if r.block_id not in own_blocks:
             continue
         day_kg[(current_year, r.block_id, local_ts.date())] += (r.weight_kg - r.deduction_kg)
+
+    return {"current_year": current_year, "anchor_month": anchor_month, "anchor_day": anchor_day,
+            "blocks": blocks, "day_kg": day_kg, "estimated_blocks": estimated_blocks}
+
+
+def build_analysis_summary(boord: Session, owner: Session) -> dict:
+    """Historical (2020-2025, from HistoricalHarvest) vs current-season
+    (from HarvestRecord) comparisons for the Analysis tab: season pace,
+    per-block/variety yield, season length, and monthly totals. Aggregated
+    in Python over the full table - fine at this farm's data volume, and
+    keeps the split-block/typo handling (baked into HistoricalHarvest at
+    import time) out of SQL.
+
+    Covers this farm's own blocks only (db.own_farm_block_ids) - Boord's
+    block register can hold another grower's orchard, and HistoricalHarvest
+    has history for this farm alone, so mixing the two would compare this
+    season against a past that isn't its own.
+
+    `boord` supplies SystemSetting / Block / HarvestRecord (Boord's live
+    database, read-only); `owner` supplies HistoricalHarvest (this app's
+    own database)."""
+    season = season_day_kg(boord, owner)
+    current_year = season["current_year"]
+    anchor_month, anchor_day = season["anchor_month"], season["anchor_day"]
+    blocks, day_kg, estimated_blocks = season["blocks"], season["day_kg"], season["estimated_blocks"]
 
     years = sorted({k[0] for k in day_kg})
     historical_years = [y for y in years if y != current_year]
@@ -165,6 +185,24 @@ def build_analysis_summary(boord: Session, owner: Session) -> dict:
         if block_id:
             block_year_kg[block_id][year] += kg
 
+    # Seasons before the daily record began (2012-2019) exist only as
+    # per-block season totals (HistoricalAnnualYield, block_id set; the
+    # older whole-farm rows carry block_id None and can't be placed on a
+    # block). They extend the per-block and per-variety trends back to the
+    # replanting without touching anything that needs dates (season pace,
+    # season length, monthly). Each is flagged annual_only, and the
+    # frontend leaves them OUT of a block's "historical average": in
+    # 2012-2015 block 7 was the only block bearing at all (see
+    # routers/risk.py's REGRESSION_START_YEAR), so averaging those seasons
+    # in would score every replanted block against its own sapling years.
+    annual_only_years: set = set()
+    for a in owner.exec(select(HistoricalAnnualYield)).all():
+        if a.block_id and a.block_id in blocks and a.season_year not in block_year_kg[a.block_id]:
+            block_year_kg[a.block_id][a.season_year] += a.kg
+            annual_only_years.add(a.season_year)
+    # A year that some block has daily rows for is daily-tracked, full stop.
+    annual_only_years -= set(years)
+
     # by_year carries kg/kg_ha/kg_tree for every year including the current
     # one - the frontend derives "this season vs historical average" from it
     # for whichever metric (kg/ha or kg/tree) is selected, rather than the
@@ -176,7 +214,8 @@ def build_analysis_summary(boord: Session, owner: Session) -> dict:
         for year, kg in by_year.items():
             kg_ha = round(kg / b.hectares, 1) if b and b.hectares else None
             kg_tree = round(kg / b.trees, 1) if b and b.trees else None
-            by_year_out[year] = {"kg": round(kg, 1), "kg_ha": kg_ha, "kg_tree": kg_tree}
+            by_year_out[year] = {"kg": round(kg, 1), "kg_ha": kg_ha, "kg_tree": kg_tree,
+                                 "annual_only": year in annual_only_years}
         block_yield.append({
             "block_id": block_id, "name": b.name if b else block_id, "variety": b.variety if b else "",
             "hectares": b.hectares if b else None, "trees": b.trees if b else None,
@@ -191,10 +230,11 @@ def build_analysis_summary(boord: Session, owner: Session) -> dict:
             variety_blocks[b.variety].add(block_id)
 
     variety_year_kg: dict = defaultdict(lambda: defaultdict(float))
-    for (year, block_id, d), kg in day_kg.items():
+    for block_id, by_year in block_year_kg.items():   # daily-tracked AND annual-only seasons
         b = blocks.get(block_id)
         if b and b.variety:
-            variety_year_kg[b.variety][year] += kg
+            for year, kg in by_year.items():
+                variety_year_kg[b.variety][year] += kg
 
     variety_yield = []
     for variety, by_year in variety_year_kg.items():
@@ -205,6 +245,7 @@ def build_analysis_summary(boord: Session, owner: Session) -> dict:
                 "kg": round(kg, 1),
                 "kg_ha": round(kg / total_ha, 1) if total_ha else None,
                 "kg_tree": round(kg / total_trees, 1) if total_trees else None,
+                "annual_only": year in annual_only_years,
             }
             for year, kg in by_year.items()
         }
@@ -260,6 +301,9 @@ def build_analysis_summary(boord: Session, owner: Session) -> dict:
         # so it travels with the data rather than being fetched separately.
         "season_anchor": {"month": anchor_month, "day": anchor_day},
         "historical_years": historical_years,
+        # The x-axis for the per-block / per-variety views: historical_years
+        # plus the annual-only seasons above, oldest first, current excluded.
+        "block_years": sorted((set(historical_years) | annual_only_years) - {current_year}),
         "season_to_date_kg": round(season_to_date_kg, 1),
         "pct_vs_average": pct_vs_average,
         "season_pace": {"years": season_pace, "average": avg_curve},

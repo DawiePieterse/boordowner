@@ -118,6 +118,7 @@ def _build_fake_boord_db() -> None:
 _build_fake_boord_db()
 
 import main  # noqa: E402  (imports after env + fake DB are ready)
+import weather as weather_module  # noqa: E402
 from db import owner_engine  # noqa: E402
 
 
@@ -132,5 +133,6 @@ def client():
             os.remove(config.OWNER_DB_PATH + suffix)
         except OSError:
             pass
+    weather_module._sync_failed_until = 0.0   # a failed sync in one test must not skip the next
     with TestClient(main.app) as c:   # startup: init_owner_db
         yield c

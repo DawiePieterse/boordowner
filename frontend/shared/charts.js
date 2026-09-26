@@ -89,7 +89,7 @@ const LWCharts = (() => {
     const xMin = xMinOverride != null ? Math.min(xMinOverride, ...allX) : Math.min(...allX);
     const xMax = xMaxOverride != null ? Math.max(xMaxOverride, ...allX) : Math.max(...allX);
     const yMax = niceMax(Math.max(...allY, 0));
-    const padL = 54, padB = 26, padT = 12, padR = 16;
+    const padL = 62, padB = 26, padT = 12, padR = 16;
     const width = Math.max(420, Math.min(1400, (xMax - xMin + 1) * minWidthPerPoint + padL + padR));
     const w = width - padL - padR, h = height - padT - padB;
     const sx = (x) => padL + (xMax > xMin ? ((x - xMin) / (xMax - xMin)) * w : w / 2);
@@ -101,13 +101,13 @@ const LWCharts = (() => {
       const val = (yMax / ySteps) * i;
       const y = sy(val);
       children.push(svg("line", { x1: padL, x2: padL + w, y1: y, y2: y, stroke: "#e2e8f0", "stroke-width": 1 }));
-      children.push(text(padL - 8, y + 4, yLabel(val), { "text-anchor": "end", fill: "#94a3b8", style: "font-size:10px" }));
+      children.push(text(padL - 8, y + 4, yLabel(val), { "text-anchor": "end", fill: "#64748b", style: "font-size:12px" }));
     }
     const labelCount = Math.min(8, Math.max(1, xMax - xMin));
     for (let i = 0; i <= labelCount; i++) {
       const x = xMin + Math.round(((xMax - xMin) * i) / labelCount);
       const px = sx(x);
-      children.push(text(px, padT + h + 18, xLabel(x), { "text-anchor": "middle", fill: "#94a3b8", style: "font-size:10px" }));
+      children.push(text(px, padT + h + 18, xLabel(x), { "text-anchor": "middle", fill: "#64748b", style: "font-size:12px" }));
     }
 
     withPoints.forEach((s) => {
@@ -196,8 +196,8 @@ const LWCharts = (() => {
         const val = d.max - ((d.max - d.min) / Y_STEPS) * i;
         children.push(text(axis === 0 ? padL - 8 : padL + w + 8, y + 4,
                             `${val.toFixed(meta.decimals ?? 1)}${meta.unit || ""}`,
-                            { "text-anchor": axis === 0 ? "end" : "start", fill: "#94a3b8",
-                              style: "font-size:10px" }));
+                            { "text-anchor": axis === 0 ? "end" : "start", fill: "#64748b",
+                              style: "font-size:12px" }));
       });
     }
     // Rotated axis titles, each in the colour of the lines it belongs to, so
@@ -214,7 +214,7 @@ const LWCharts = (() => {
     const labelCount = Math.min(8, Math.max(1, xMax - xMin));
     for (let i = 0; i <= labelCount; i++) {
       const x = xMin + Math.round(((xMax - xMin) * i) / labelCount);
-      children.push(text(sx(x), padT + h + 18, xLabel(x), { "text-anchor": "middle", fill: "#94a3b8", style: "font-size:10px" }));
+      children.push(text(sx(x), padT + h + 18, xLabel(x), { "text-anchor": "middle", fill: "#64748b", style: "font-size:12px" }));
     }
 
     withPoints.forEach((s) => {
@@ -247,7 +247,7 @@ const LWCharts = (() => {
     if (averageLine && averageLine.value != null) allVals.push(averageLine.value);
     if (!categories.length || !allVals.length) return emptyState(container);
     const yMax = niceMax(Math.max(...allVals, 0));
-    const padL = 54, padB = 34, padT = 12, padR = 16;
+    const padL = 62, padB = 34, padT = 12, padR = 16;
     const width = Math.max(420, padL + padR + categories.length * groupWidth);
     const w = width - padL - padR, h = height - padT - padB;
     const catW = w / categories.length;
@@ -260,7 +260,7 @@ const LWCharts = (() => {
       const val = (yMax / ySteps) * i;
       const y = sy(val);
       children.push(svg("line", { x1: padL, x2: padL + w, y1: y, y2: y, stroke: "#e2e8f0", "stroke-width": 1 }));
-      children.push(text(padL - 8, y + 4, yLabel(val), { "text-anchor": "end", fill: "#94a3b8", style: "font-size:10px" }));
+      children.push(text(padL - 8, y + 4, yLabel(val), { "text-anchor": "end", fill: "#64748b", style: "font-size:12px" }));
     }
 
     categories.forEach((cat, ci) => {
@@ -275,7 +275,7 @@ const LWCharts = (() => {
         children.push(svg("rect", { x: bx, y: by, width: Math.max(1, barW - 2), height: Math.max(0, padT + h - by),
                                      fill: (s.colors && s.colors[ci]) || s.color, rx: 2 }, [titleEl]));
       });
-      children.push(text(groupX + catW / 2, padT + h + 18, cat, { "text-anchor": "middle", fill: "#64748b", style: "font-size:10px" }));
+      children.push(text(groupX + catW / 2, padT + h + 18, cat, { "text-anchor": "middle", fill: "#64748b", style: "font-size:12px" }));
     });
 
     if (averageLine && averageLine.value != null) {
@@ -301,7 +301,7 @@ const LWCharts = (() => {
     const totals = categories.map((_, ci) => series.reduce((s, ser) => s + (ser.values[ci] || 0), 0));
     if (!categories.length || !totals.some((t) => t > 0)) return emptyState(container);
     const yMax = niceMax(Math.max(...totals, 0));
-    const padL = 60, padB = 34, padT = 12, padR = 16;
+    const padL = 68, padB = 34, padT = 12, padR = 16;
     const groupWidth = Math.max(barWidth + 24, 80);
     const width = Math.max(420, padL + padR + categories.length * groupWidth);
     const w = width - padL - padR, h = height - padT - padB;
@@ -314,7 +314,7 @@ const LWCharts = (() => {
       const val = (yMax / ySteps) * i;
       const y = sy(val);
       children.push(svg("line", { x1: padL, x2: padL + w, y1: y, y2: y, stroke: "#e2e8f0", "stroke-width": 1 }));
-      children.push(text(padL - 8, y + 4, yLabel(val), { "text-anchor": "end", fill: "#94a3b8", style: "font-size:10px" }));
+      children.push(text(padL - 8, y + 4, yLabel(val), { "text-anchor": "end", fill: "#64748b", style: "font-size:12px" }));
     }
 
     categories.forEach((cat, ci) => {
@@ -331,7 +331,7 @@ const LWCharts = (() => {
                                      fill: s.color }, [titleEl]));
         offset += v;
       });
-      children.push(text(groupX + catW / 2, padT + h + 18, cat, { "text-anchor": "middle", fill: "#64748b", style: "font-size:10px" }));
+      children.push(text(groupX + catW / 2, padT + h + 18, cat, { "text-anchor": "middle", fill: "#64748b", style: "font-size:12px" }));
     });
 
     const root = svg("svg", { viewBox: `0 0 ${width} ${height}`, width: "100%", height,
@@ -456,7 +456,7 @@ const LWCharts = (() => {
     const MONTH_TICKS = [[1, "Aug"], [32, "Sep"], [62, "Oct"], [93, "Nov"], [123, "Dec"], [154, "Jan"]]
       .filter(([d]) => d <= xMax + 5);
 
-    const padL = 56, padR = 190, padT = 12, padB = 26;
+    const padL = 64, padR = 190, padT = 12, padB = 26;
     const plotH = rows.length * rowHeight;
     const width = 760;
     const w = width - padL - padR;
@@ -466,7 +466,7 @@ const LWCharts = (() => {
     MONTH_TICKS.forEach(([d, label]) => {
       const px = sx(d);
       children.push(svg("line", { x1: px, x2: px, y1: padT, y2: padT + plotH, stroke: "#e2e8f0", "stroke-width": 1 }));
-      children.push(text(px, padT + plotH + 18, label, { "text-anchor": "middle", fill: "#94a3b8", style: "font-size:10px" }));
+      children.push(text(px, padT + plotH + 18, label, { "text-anchor": "middle", fill: "#64748b", style: "font-size:12px" }));
     });
 
     rows.forEach((row, i) => {
@@ -551,6 +551,33 @@ const LWCharts = (() => {
   // <img> approach would need - and browsers refuse to read pixels back
   // out of a canvas that was drawn from a foreignObject image ("tainted
   // canvas"), so that simpler approach doesn't work here.
+  // One delegated click handler per tab for its "download as PDF" buttons
+  // (<button class="chart-pdf-btn" data-target="<element id>"
+  // data-title="...">). Delegated so it keeps working after any chart's own
+  // re-render; called once from each tab module's bind(). The three tabs
+  // used to carry a byte-for-byte copy of this each.
+  function bindPdfButtons(rootEl) {
+    rootEl.addEventListener("click", async (e) => {
+      const btn = e.target.closest(".chart-pdf-btn");
+      if (!btn) return;
+      const target = document.getElementById(btn.dataset.target);
+      if (!target) return;
+      const icon = btn.querySelector("i");
+      icon.className = "fa-solid fa-spinner fa-spin";
+      btn.disabled = true;
+      try {
+        const filename = `${btn.dataset.title.replace(/[^a-zA-Z0-9]+/g, "_")}.pdf`;
+        await exportPDF(target, { title: btn.dataset.title, filename });
+      } catch (err) {
+        console.error("PDF export failed:", err);
+        Boord.toast("Could not create PDF");
+      } finally {
+        icon.className = "fa-solid fa-file-pdf";
+        btn.disabled = false;
+      }
+    });
+  }
+
   // html2canvas + jsPDF are ~560 KB between them and only ever needed
   // after a "download as PDF" tap, so they are fetched then rather than
   // blocking every page open. The service worker keeps them in the offline
@@ -634,5 +661,5 @@ const LWCharts = (() => {
     pdf.save(filename);
   }
 
-  return { lineChart, dualAxisLineChart, barChart, stackedBarChart, heatmap, bubbleMatrix, rangeBarChart, sparkline, legend, emptyState, loadingState, exportPDF, PALETTE };
+  return { lineChart, dualAxisLineChart, barChart, stackedBarChart, heatmap, bubbleMatrix, rangeBarChart, sparkline, legend, emptyState, loadingState, bindPdfButtons, exportPDF, PALETTE };
 })();

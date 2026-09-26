@@ -466,6 +466,22 @@ def fetch_hourly_range(lat: float, lon: float, start: date, end: date) -> list:
     return rows
 
 
+# Catch-up is fetched in slices of at most this many days, each on the
+# short per-request timeout below, and at most SYNC_MAX_CHUNKS_PER_CALL
+# slices per tab open. A server that has been off (or offline) for months
+# used to ask for the whole gap in ONE 3-second call, which never came back
+# in time - so every later Weather/Risk load timed out the same way and the
+# gap never closed. Slices land one at a time, so each tab open makes real
+# progress and a long gap closes over a few opens.
+SYNC_CHUNK_DAYS = 31
+SYNC_MAX_CHUNKS_PER_CALL = 3
+SYNC_FETCH_TIMEOUT = 3
+# A failed catch-up isn't retried for this long. Without it an offline
+# server paid the full fetch timeout on every single tab open.
+SYNC_FAILURE_BACKOFF_SECONDS = 60
+_sync_failed_until = 0.0
+
+
 def sync_recent_weather(owner: Session, boord: Session) -> dict:
     """Best-effort catch-up: fetches whatever hours are missing since the
     last stored row and appends them (never replaces). Called as a side
@@ -487,7 +503,15 @@ def sync_recent_weather(owner: Session, boord: Session) -> dict:
     frontend abandons after Boord.NETWORK_TIMEOUT_MS (8s, see shared/api.js) -
     a slow/dead connection must fail fast enough here that the endpoint can
     still return the already-stored data within that budget, rather than
-    the tab hanging past it and reading as fully offline."""
+    the tab hanging past it and reading as fully offline.
+
+    Returns {"synced": n} plus "error": True if a fetch failed (whatever
+    landed before it is kept), "complete": False if more remains to catch
+    up than one call fetches (see SYNC_MAX_CHUNKS_PER_CALL), and
+    "no_location"/"location_changed" as below."""
+    global _sync_failed_until
+    if _time.monotonic() < _sync_failed_until:
+        return {"synced": 0, "error": True}
     try:
         # .limit(1) is load-bearing, not tidiness. `.first()` reads the first
         # row off the cursor but leaves the SQL unbounded, so SQLite was told
@@ -523,16 +547,34 @@ def sync_recent_weather(owner: Session, boord: Session) -> dict:
             # the lot wholesale.
             return {"synced": 0, "location_changed": True}
 
-        start_date = latest.timestamp.date().isoformat() if latest else HISTORY_START_DATE
-        data = fetch_historical_hourly(lat, lon, start_date, now.date().isoformat(), timeout=3)
-        rows = parse_hourly_rows(data, lat, lon)
-        new_rows = [WeatherHistory(**r) for r in rows
-                    if latest is None or r["timestamp"] > latest.timestamp]
-        if new_rows:
-            with db.weather_append_lock:
-                owner.add_all(new_rows)
-                owner.commit()
-        return {"synced": len(new_rows)}
+        chunk_start = latest.timestamp.date() if latest else date.fromisoformat(HISTORY_START_DATE)
+        today = now.date()
+        newest = latest.timestamp if latest else None
+        synced = 0
+        for _ in range(SYNC_MAX_CHUNKS_PER_CALL):
+            if chunk_start > today:
+                break
+            chunk_end = min(chunk_start + timedelta(days=SYNC_CHUNK_DAYS - 1), today)
+            try:
+                data = fetch_historical_hourly(lat, lon, chunk_start.isoformat(), chunk_end.isoformat(),
+                                               timeout=SYNC_FETCH_TIMEOUT)
+            except Exception:
+                _sync_failed_until = _time.monotonic() + SYNC_FAILURE_BACKOFF_SECONDS
+                return {"synced": synced, "error": True}
+            new_rows = [WeatherHistory(**r) for r in parse_hourly_rows(data, lat, lon)
+                        if newest is None or r["timestamp"] > newest]
+            if new_rows:
+                with db.weather_append_lock:
+                    owner.add_all(new_rows)
+                    owner.commit()
+                synced += len(new_rows)
+                newest = max(r.timestamp for r in new_rows)
+            chunk_start = chunk_end + timedelta(days=1)
+        result = {"synced": synced}
+        if chunk_start <= today:
+            result["complete"] = False
+        return result
     except Exception:
         owner.rollback()
+        _sync_failed_until = _time.monotonic() + SYNC_FAILURE_BACKOFF_SECONDS
         return {"synced": 0, "error": True}

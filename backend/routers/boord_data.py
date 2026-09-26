@@ -3,9 +3,10 @@ the lot lists behind the Dashboard, the supplier dropdown, and the pack
 house's system settings.
 
 In Boord these endpoints are unauthenticated (field/pack-house tablets hit
-them without logging in). Here they read Boord's database read-only and sit
-behind the Owner login like everything else, so the frontend only ever talks
-to this backend and none of this is readable without an account.
+them without logging in). Here they read Boord's database read-only. There
+is no sign-in in this app either - reaching the port is the access control
+(loopback bind + `tailscale serve`, see README's Access section), so every
+endpoint here answers anyone on the tailnet.
 
 The lot-list bodies and their helpers are copied from
 ../Boord/backend/routers/lots.py, with the write paths (recompute_lot_totals,

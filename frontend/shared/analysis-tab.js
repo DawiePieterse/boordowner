@@ -30,27 +30,7 @@ const LWAnalysisTab = (() => {
       if (_data) renderVarietyYield(_data);
     });
 
-    // Delegated so it keeps working after any chart's own re-render, and
-    // covers every "download as PDF" button with one listener.
-    document.getElementById("tab-analysis").addEventListener("click", async (e) => {
-      const btn = e.target.closest(".chart-pdf-btn");
-      if (!btn) return;
-      const target = document.getElementById(btn.dataset.target);
-      if (!target) return;
-      const icon = btn.querySelector("i");
-      icon.className = "fa-solid fa-spinner fa-spin";
-      btn.disabled = true;
-      try {
-        const filename = `${btn.dataset.title.replace(/[^a-zA-Z0-9]+/g, "_")}.pdf`;
-        await LWCharts.exportPDF(target, { title: btn.dataset.title, filename });
-      } catch (err) {
-        console.error("PDF export failed:", err);
-        Boord.toast("Could not create PDF");
-      } finally {
-        icon.className = "fa-solid fa-file-pdf";
-        btn.disabled = false;
-      }
-    });
+    LWCharts.bindPdfButtons(document.getElementById("tab-analysis"));
   }
 
   // fetchSummary: () => Promise<data> - the caller supplies the call
@@ -60,18 +40,28 @@ const LWAnalysisTab = (() => {
   async function load(fetchSummary, { force = false } = {}) {
     if (!force && _data && Boord.isFresh(_loadedAt)) return;
     if (!_data) LWCharts.loadingState(document.getElementById("analysisKpiGrid"), "Loading this season...");
-    let data;
+    let result;
     try {
-      data = await fetchSummary();
+      result = await Boord.cachedLoad("boord_cached_analysis", fetchSummary);
     } catch (e) {
-      if (Boord.isNetworkError(e)) { Boord.setOffline(true); return; }
+      if (Boord.isNetworkError(e)) {
+        Boord.setOffline(true);
+        Boord.setOfflineBannerText("Offline - no saved analysis on this device yet");
+        return;
+      }
       console.error("Analysis load failed:", e);
       Boord.toast("Could not load analysis data");
       return;
     }
-    Boord.setOffline(false);
+    if (result.cached) {
+      Boord.setOffline(true);
+      Boord.setOfflineBannerText(`Offline - showing analysis from ${Boord.describeAge(result.at)}`);
+    } else {
+      Boord.setOffline(false);
+    }
+    const data = result.data;
     _data = data;
-    _loadedAt = Date.now();
+    _loadedAt = result.cached ? 0 : Date.now();   // saved figures: try again on the next tap
     renderAnalysisKpis(data);
     renderSeasonPace(data);
     renderBlockYield(data);
@@ -158,8 +148,12 @@ const LWAnalysisTab = (() => {
 
     const rows = blocks.map((b) => {
       const current = b.by_year[data.current_year] ? b.by_year[data.current_year][metric] : null;
+      // The average is over the daily-tracked seasons only. The annual-only
+      // ones (2012-2019, see the backend) include the replanted blocks'
+      // sapling years, which would score every block against its own
+      // infancy - they extend the trend charts below, not this baseline.
       const histVals = Object.entries(b.by_year)
-        .filter(([y]) => parseInt(y, 10) !== data.current_year)
+        .filter(([y, v]) => parseInt(y, 10) !== data.current_year && !v.annual_only)
         .map(([, v]) => v[metric]).filter((v) => v != null);
       const historicalAvg = histVals.length
         ? Math.round((histVals.reduce((s, v) => s + v, 0) / histVals.length) * 10) / 10 : null;
@@ -195,15 +189,37 @@ const LWAnalysisTab = (() => {
       <tr class="border-b">
         <td class="p-2">${b.name || b.block_id}${flag}</td>
         <td class="p-2">${b.variety || "-"}</td>
+        <td class="p-2 text-slate-500">${b.hectares ?? "-"}</td>
+        <td class="p-2 text-slate-500">${b.trees != null ? b.trees.toLocaleString() : "-"}</td>
         <td class="p-2">${current ?? "-"}</td>
         <td class="p-2">${historicalAvg ?? "-"}</td>
         <td class="p-2 font-semibold ${pctClass}">${pctText}</td>
       </tr>`;
-    }).join("") || `<tr><td class="p-2 text-slate-400" colspan="5">No data</td></tr>`;
+    }).join("") || `<tr><td class="p-2 text-slate-400" colspan="7">No data</td></tr>`;
+  }
+
+  // The per-block / per-variety x-axis: every season with a per-block
+  // total, which reaches back past the daily record (block_years) - older
+  // payloads only have historical_years.
+  function _blockYears(data) {
+    return [...(data.block_years || data.historical_years), data.current_year];
+  }
+
+  // A one-line footnote under a chart whose axis includes annual-only
+  // seasons, so a reader knows why those columns look different in kind.
+  function _annualNote(container, data) {
+    const annual = (data.block_years || []).filter((y) =>
+      data.block_yield.some((b) => b.by_year[y] && b.by_year[y].annual_only));
+    if (!annual.length) return;
+    const note = document.createElement("div");
+    note.className = "text-xs text-slate-400 mt-1";
+    note.textContent = `${annual[0]}-${annual[annual.length - 1]}: season totals from the farm's older records `
+      + `(no daily detail, and the replanted blocks were still young) - shown for the trend, left out of the historical average.`;
+    container.appendChild(note);
   }
 
   function renderBlockSeasonBubble(data) {
-    const years = [...data.historical_years, data.current_year];
+    const years = _blockYears(data);
     const blockTotal = (b) => Object.values(b.by_year).reduce((s, v) => s + (v.kg || 0), 0);
     const blocks = [...data.block_yield].sort((a, b) => blockTotal(b) - blockTotal(a));
     const kFormat = (v) => (v >= 1000 ? `${Math.round(v / 1000)}K` : Math.round(v));
@@ -217,13 +233,14 @@ const LWAnalysisTab = (() => {
         values: blocks.map(blockTotal),
       },
     });
+    _annualNote(document.getElementById("blockSeasonBubbleChart"), data);
   }
 
   function renderYieldPerTreeHeatmap(data) {
     const metric = document.getElementById("yieldPerTreeMetric").value; // "kg_tree" | "kg_ha"
     const metricLabel = metric === "kg_ha" ? "Hectare" : "Tree";
     document.getElementById("yieldPerTreeTitle").textContent = `Yield per ${metricLabel} by Block and Season`;
-    const years = [...data.historical_years, data.current_year];
+    const years = _blockYears(data);
     const blocks = data.block_yield;
     LWCharts.heatmap(document.getElementById("yieldPerTreeHeatmap"), {
       rowLabels: blocks.map((b) => b.name || b.block_id),
@@ -231,11 +248,12 @@ const LWAnalysisTab = (() => {
       values: blocks.map((b) => years.map((y) => (b.by_year[y] ? b.by_year[y][metric] : null))),
       valueFormat: (v) => v.toFixed(1),
     });
+    _annualNote(document.getElementById("yieldPerTreeHeatmap"), data);
   }
 
   function renderVarietyYield(data) {
     const varieties = data.variety_yield;
-    const years = [...data.historical_years, data.current_year];
+    const years = _blockYears(data);
     const categories = years.map(String);
 
     const select = document.getElementById("varietyFilter");

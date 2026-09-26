@@ -8,6 +8,7 @@ codebase or another:
   * we never hold a read open across a slow outbound call,
   * we notice at boot when its schema has moved past what we read.
 """
+import os
 import sqlite3
 
 import pytest
@@ -247,3 +248,22 @@ def test_rows_predating_an_added_column_read_back_as_none(client):
         row = s.exec(select(WeatherHistory)).one()
     assert row.sunshine_duration_s is None
     assert row.timestamp == datetime(2024, 1, 1, 0, 0, 0)
+
+
+def test_startup_waits_for_boord_then_gives_up(monkeypatch):
+    """A boot race with Boord's own startup (boord.db missing or locked for
+    a moment) is retried within BOORD_STARTUP_WAIT_SECONDS, then raised
+    as-is - see main._wait_for_boord()."""
+    monkeypatch.setattr(config, "BOORD_DB_PATH", os.path.join(config.DATA_DIR, "nope.db"))
+    monkeypatch.setattr(config, "BOORD_STARTUP_WAIT_SECONDS", 15)
+    clock = {"now": 0.0}
+    sleeps = []
+    monkeypatch.setattr(main.time, "monotonic", lambda: clock["now"])
+
+    def fake_sleep(secs):
+        sleeps.append(secs)
+        clock["now"] += secs
+    monkeypatch.setattr(main.time, "sleep", fake_sleep)
+    with pytest.raises(RuntimeError, match="BOORD_DB_PATH not found"):
+        main._wait_for_boord()
+    assert sleeps == [10, 10]   # 0s, 10s: retried; 20s: past the 15s deadline, raised

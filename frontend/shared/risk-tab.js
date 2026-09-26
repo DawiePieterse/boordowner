@@ -10,11 +10,14 @@
 // current-season kg scenarios - Favorable/Expected/Unfavorable - built by
 // blending real short-range weather forecast with historical-scenario
 // ranges for whatever part of the season hasn't happened yet.
-// Renders the Risk tab from /api/risk/summary + /api/risk/forecast. Once
+// Renders the Risk tab from /api/risk/summary, which carries the Harvest
+// Forecast under "forecast" (one server-side driver-state build serves
+// both, rather than two parallel requests each doing it). Once
 // shared with Boord's admin app and the old Owner View inside it, both of
 // which are gone - see weather-tab.js, same as analysis-tab.js.
 const LWRiskTab = (() => {
   let _data = null;
+  let _loadedAt = 0;
   let _bound = false;
   let _selectedYear = null;
 
@@ -51,19 +54,22 @@ const LWRiskTab = (() => {
     });
   }
 
-  // fetchSummary/fetchForecast: () => Promise<data> - the caller supplies
-  // the calls (owner.js: Boord.api). The
-  // forecast call is kicked off alongside the summary
-  // one but handled independently: a forecast/Open-Meteo hiccup shows a
-  // "currently unavailable" note in just that card rather than failing the
-  // whole tab - the score header, back-test charts and methodology all
-  // still render from the summary call alone.
-  async function load(fetchSummary, fetchForecast) {
-    const forecastPromise = fetchForecast().catch((e) => {
-      console.error("Forecast load failed:", e);
-      return null;
-    });
-
+  // fetchSummary: () => Promise<data> - the caller supplies the call
+  // (owner.js: Boord.api). data.forecast is the Harvest Forecast, or null
+  // if its build failed server-side: that shows a "currently unavailable"
+  // note in just that card rather than failing the whole tab - the score
+  // header, back-test charts and methodology all render from the rest.
+  // `force` bypasses the freshness window (pull-to-refresh, reconnect).
+  async function load(fetchSummary, { force = false } = {}) {
+    if (!force && _data && Boord.isFresh(_loadedAt)) return;
+    if (!_data) {
+      // This call does real work (a full season scan, every reference
+      // season's weather, a live forecast fetch) and can take several
+      // seconds on a slow link - say so, rather than leaving empty cards
+      // that read as broken while it's simply still loading.
+      LWCharts.loadingState(document.getElementById("riskScoreHeader"), "Scoring this season...");
+      LWCharts.loadingState(document.getElementById("harvestForecastCard"), "Working out this season's forecast...");
+    }
     let data;
     try {
       data = await fetchSummary();
@@ -75,26 +81,15 @@ const LWRiskTab = (() => {
     }
     Boord.setOffline(false);
     _data = data;
+    _loadedAt = Date.now();
     if (_selectedYear == null || !data.seasons.some((s) => s.year === _selectedYear)) {
       _selectedYear = data.current_year;
     }
     _rebuildSeasonFilter(data);
     _renderSeason();
     _renderBackTest(data);
-
-    // The forecast endpoint does real work (a live call out to the weather
-    // service, plus a full history scan) and can take several seconds on a
-    // slow link - say so, rather than leaving an empty card that reads as
-    // broken while it's simply still loading.
-    const cardEl = document.getElementById("harvestForecastCard");
-    if (cardEl && !cardEl.innerHTML.trim()) {
-      cardEl.innerHTML = `<div class="text-sm text-slate-400 p-4 text-center">
-        <i class="fa-solid fa-spinner fa-spin"></i> Working out this season's forecast...</div>`;
-    }
-
-    const forecast = await forecastPromise;
-    _renderForecast(forecast);
-    _renderMethodology(data, forecast);
+    _renderForecast(data.forecast);
+    _renderMethodology(data, data.forecast);
   }
 
   function _rebuildSeasonFilter(data) {

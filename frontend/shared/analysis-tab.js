@@ -7,6 +7,7 @@
 // anything else renders it.
 const LWAnalysisTab = (() => {
   let _data = null;
+  let _loadedAt = 0;
   let _bound = false;
 
   function bind() {
@@ -55,7 +56,10 @@ const LWAnalysisTab = (() => {
   // fetchSummary: () => Promise<data> - the caller supplies the call
   // (owner.js: Boord.api). A network failure flips the offline banner;
   // anything else (a 500, a malformed response) falls through to the toast.
-  async function load(fetchSummary) {
+  // `force` bypasses the freshness window (pull-to-refresh, reconnect).
+  async function load(fetchSummary, { force = false } = {}) {
+    if (!force && _data && Boord.isFresh(_loadedAt)) return;
+    if (!_data) LWCharts.loadingState(document.getElementById("analysisKpiGrid"), "Loading this season...");
     let data;
     try {
       data = await fetchSummary();
@@ -67,6 +71,7 @@ const LWAnalysisTab = (() => {
     }
     Boord.setOffline(false);
     _data = data;
+    _loadedAt = Date.now();
     renderAnalysisKpis(data);
     renderSeasonPace(data);
     renderBlockYield(data);

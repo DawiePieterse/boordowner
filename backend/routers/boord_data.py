@@ -16,6 +16,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from db import get_boord_session
@@ -66,7 +67,23 @@ def _build_split_index(session: Session):
     return parents_by_slip, children_by_parent_slip
 
 
-def _related_lots(session: Session, lot: Lot, parents_by_slip: dict, children_by_parent_slip: dict) -> list:
+def _crate_totals(session: Session, lot_ids: list) -> dict:
+    """{lot_id: (crates, net kg)} for the given lots in one grouped query -
+    a lot still being picked (LotStatus.created) has no total_crates/
+    total_kg of its own yet, only its crates. One query for the whole
+    list rather than one per lot: the Dashboard fires four lot calls at
+    once against Boord's live file, so this is its busiest read path."""
+    if not lot_ids:
+        return {}
+    rows = session.exec(
+        select(HarvestRecord.lot_id, func.count(),
+               func.sum(HarvestRecord.weight_kg - HarvestRecord.deduction_kg))
+        .where(HarvestRecord.lot_id.in_(lot_ids)).group_by(HarvestRecord.lot_id)).all()
+    return {lot_id: (crates, kg or 0.0) for lot_id, crates, kg in rows}
+
+
+def _related_lots(lot: Lot, parents_by_slip: dict, children_by_parent_slip: dict,
+                  crate_totals: dict) -> list:
     related = []
     if lot.split_from_slip_number and lot.split_from_slip_number in parents_by_slip:
         related.append(parents_by_slip[lot.split_from_slip_number])
@@ -75,9 +92,8 @@ def _related_lots(session: Session, lot: Lot, parents_by_slip: dict, children_by
     result = []
     for r in related:
         if r.status == LotStatus.created:
-            crates = session.exec(select(HarvestRecord).where(HarvestRecord.lot_id == r.id)).all()
-            total_crates = len(crates)
-            total_kg = round(sum(c.weight_kg - c.deduction_kg for c in crates), 1)
+            total_crates, kg = crate_totals.get(r.id, (0, 0.0))
+            total_kg = round(kg, 1)
         else:
             total_crates = r.total_crates
             total_kg = round(r.total_kg, 1)
@@ -103,14 +119,14 @@ def list_pending(supplier_id: Optional[int] = None, period_start: Optional[date]
         start_dt, end_dt = day_bounds(period_start, period_end)
         query = query.where(Lot.timestamp >= start_dt, Lot.timestamp <= end_dt)
     lots = session.exec(query.order_by(Lot.timestamp.asc())).all()
+    crate_totals = _crate_totals(session, [l.id for l in lots])
     result = []
     for l in lots:
-        crates = session.exec(select(HarvestRecord).where(HarvestRecord.lot_id == l.id)).all()
-        if not crates:
+        if l.id not in crate_totals:
             continue
-        total_kg = sum(c.weight_kg - c.deduction_kg for c in crates)
+        crates, total_kg = crate_totals[l.id]
         enriched = _with_urgency(l, settings, suppliers)
-        enriched["total_crates"] = len(crates)
+        enriched["total_crates"] = crates
         enriched["total_kg"] = round(total_kg, 1)
         result.append(enriched)
     result.sort(key=lambda r: r["age_minutes"], reverse=True)
@@ -130,10 +146,15 @@ def list_in_transit(supplier_id: Optional[int] = None, period_start: Optional[da
         query = query.where(Lot.timestamp >= start_dt, Lot.timestamp <= end_dt)
     lots = session.exec(query.order_by(Lot.timestamp.asc())).all()
     parents_by_slip, children_by_parent_slip = _build_split_index(session)
+    # Crate totals only matter for related lots still being picked.
+    open_related = [r.id for l in lots for r in (
+        [parents_by_slip[l.split_from_slip_number]] if l.split_from_slip_number in parents_by_slip else [])
+        + children_by_parent_slip.get(l.slip_number, []) if r.status == LotStatus.created]
+    crate_totals = _crate_totals(session, open_related)
     enriched = []
     for l in lots:
         e = _with_urgency(l, settings, suppliers)
-        e["related_lots"] = _related_lots(session, l, parents_by_slip, children_by_parent_slip)
+        e["related_lots"] = _related_lots(l, parents_by_slip, children_by_parent_slip, crate_totals)
         enriched.append(e)
     enriched.sort(key=lambda r: r["age_minutes"], reverse=True)
     return enriched

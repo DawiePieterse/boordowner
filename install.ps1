@@ -247,7 +247,21 @@ $iweatharLine
         schtasks /delete /tn "$TaskName" /f | Out-Null
     }
     schtasks /create /tn "$TaskName" /tr "`"$LauncherPath`"" /sc onstart /ru SYSTEM /rl highest /f | Out-Null
-    Write-Ok "Scheduled task '$TaskName' registered (runs at every startup, no one needs to log in)"
+    # schtasks can't set these. The default execution time limit (72h) would
+    # otherwise stop the server three days after every boot; and if the
+    # process dies (Boord's database not ready yet at boot, a crash), the
+    # task must start it again rather than leave the dashboard down until
+    # the next reboot. Best-effort: an old PowerShell without these cmdlets
+    # still gets the task itself.
+    try {
+        $taskSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
+            -RestartCount 10 -RestartInterval (New-TimeSpan -Minutes 1) `
+            -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+        Set-ScheduledTask -TaskName $TaskName -Settings $taskSettings | Out-Null
+        Write-Ok "Scheduled task '$TaskName' registered (runs at every startup, restarts itself if it stops)"
+    } catch {
+        Write-Warn "Task registered, but couldn't set its restart policy: $($_.Exception.Message)"
+    }
 
     # --- Step 9: Start it now ---
     Write-Step "Starting the server now..."

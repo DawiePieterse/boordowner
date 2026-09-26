@@ -11,6 +11,7 @@ tailnet `tailscale serve` publishes it to. Read README.md's Access section
 before changing how this is served.
 """
 import os
+import time
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -73,15 +74,34 @@ def _assert_boord_schema(conn) -> None:
             ) from e
 
 
+def _wait_for_boord() -> None:
+    """Blocks until boord.db exists and answers a query, for up to
+    config.BOORD_STARTUP_WAIT_SECONDS - a boot race with Boord's own
+    startup (see that setting) is transient and must not take this
+    service down for the whole uptime. Schema drift is a different case
+    and stays a hard failure: see _assert_boord_schema()."""
+    deadline = time.monotonic() + config.BOORD_STARTUP_WAIT_SECONDS
+    while True:
+        try:
+            if not os.path.exists(config.BOORD_DB_PATH):
+                raise RuntimeError(
+                    f"BOORD_DB_PATH not found: {config.BOORD_DB_PATH}\n"
+                    f"Install Boord first, or set BOORD_DB_PATH to its data/boord.db."
+                )
+            with boord_engine.connect() as conn:
+                conn.execute(text("SELECT 1"))   # unreadable / locked / query_only can't be set
+            return
+        except Exception as e:  # noqa: BLE001 - retried, then re-raised as-is
+            if time.monotonic() >= deadline:
+                raise
+            print(f"[startup] Boord's database isn't ready yet ({e}); retrying in 10s", flush=True)
+            time.sleep(10)
+
+
 @app.on_event("startup")
 def on_startup():
-    if not os.path.exists(config.BOORD_DB_PATH):
-        raise RuntimeError(
-            f"BOORD_DB_PATH not found: {config.BOORD_DB_PATH}\n"
-            f"Install Boord first, or set BOORD_DB_PATH to its data/boord.db."
-        )
+    _wait_for_boord()
     with boord_engine.connect() as conn:
-        conn.execute(text("SELECT 1"))       # fail fast if unreadable / query_only can't be set
         _assert_boord_schema(conn)
     init_owner_db()
 

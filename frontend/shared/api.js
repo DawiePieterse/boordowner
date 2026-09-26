@@ -38,6 +38,18 @@ const Boord = {
   // with an error. Screens use this to tell "no connection" apart from
   // "rejected" - e.g. the device setup screen must not wipe a saved device
   // id just because the server is unreachable.
+  // How long a tab's last successful load is reused before a tab tap
+  // refetches it. Analysis and Risk are the heaviest calls the server
+  // makes (a full-season scan, every reference-season weather hour) and
+  // their figures change at most a few times an hour, so flicking between
+  // tabs must not re-run them. Pull-to-refresh and coming back online
+  // always bypass this.
+  TAB_FRESH_MS: 5 * 60 * 1000,
+
+  isFresh(loadedAt) {
+    return !!loadedAt && Date.now() - loadedAt < Boord.TAB_FRESH_MS;
+  },
+
   isNetworkError(e) {
     return e instanceof TypeError || (!!e && (e.name === "AbortError" || e.name === "TimeoutError"));
   },

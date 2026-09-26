@@ -41,4 +41,12 @@ OWNER_PORT = int(os.environ.get("OWNER_PORT", "8010"))
 # its own. See weather.fetch_iweathar_current().
 IWEATHAR_STATION_ID = os.environ.get("IWEATHAR_STATION_ID") or None
 
+# How long startup waits for Boord's database to become readable before
+# giving up. Both apps start from scheduled tasks at boot, and Boord
+# creates/migrates boord.db on ITS startup - so on a fresh install or right
+# after a Boord update this app can start first and find the file missing
+# or locked. Without a wait, that one lost race left the service down until
+# the next reboot. 0 = fail immediately (tests).
+BOORD_STARTUP_WAIT_SECONDS = int(os.environ.get("BOORD_STARTUP_WAIT_SECONDS", "300"))
+
 FRONTEND_DIR = os.path.join(REPO_ROOT, "frontend")

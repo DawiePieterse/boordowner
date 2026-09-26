@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Owner">
 <meta name="theme-color" content="#0A2F6B">
-<script src="./shared/tailwind.js"></script>
+<link rel="stylesheet" href="./shared/tailwind.css">
 <link rel="stylesheet" href="./shared/vendor/fontawesome/css/all.min.css">
 <link rel="stylesheet" href="./shared/styles.css">
 <script src="./shared/api.js"></script>
@@ -19,8 +19,7 @@
 <script src="./shared/weather-tab.js"></script>
 <script src="./shared/risk-tab.js"></script>
 <script src="./shared/ptr.js"></script>
-<script src="./shared/vendor/html2canvas/html2canvas.min.js"></script>
-<script src="./shared/vendor/jspdf/jspdf.umd.min.js"></script>
+<!-- html2canvas + jsPDF are loaded on the first "download as PDF" tap (charts.js), not here. -->
 </head>
 <body class="bg-slate-100 min-h-screen pb-6">
 

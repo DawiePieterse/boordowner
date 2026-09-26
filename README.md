@@ -49,7 +49,9 @@ frontend/
   owner.js           startup, tab routing, dashboard offline cache
   service-worker.js  offline shell, cache prefix "boord-owner-"
   shared/            vendored from Boord: api.js (no credentials sent),
-                     styles.css, tailwind.js, ptr.js, fontawesome, charts + tab modules
+                     styles.css, ptr.js, fontawesome, charts + tab modules;
+                     tailwind.css is BUILT (see "Frontend styles" below)
+  tailwind.config.js the build config for shared/tailwind.css
 scripts/             the four historical-import scripts (need BOORD_DB_PATH set),
                      block_renames.py (workbook block ids -> Boord's register)
                      and check_block_ids.py (catches the next rename)
@@ -76,6 +78,15 @@ onto the Dashboard.
 
 ```bash
 cd backend && .venv/bin/python -m pytest
+```
+
+**Frontend styles:** `frontend/shared/tailwind.css` is precompiled from the
+classes the HTML/JS actually use (Tailwind used to ship as a 400 KB runtime
+that recompiled them in the browser on every open). After adding a Tailwind
+class the app hasn't used before, rebuild it and commit the result:
+
+```bash
+cd frontend && npx tailwindcss@3 -c tailwind.config.js -i shared/tailwind.src.css -o shared/tailwind.css --minify
 ```
 
 **Farm server (Windows):** double-click `install.bat`. It installs Python if

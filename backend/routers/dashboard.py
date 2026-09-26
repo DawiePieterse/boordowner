@@ -50,26 +50,6 @@ def _supplier_display_name(worker: Optional[Worker], suppliers_by_id: dict, own_
     return supplier.name if supplier else "Unknown"
 
 
-def _worker_kg_totals(session: Session, period_start: date, period_end: date,
-                       supplier_id: Optional[int] = None) -> dict:
-    """Per-worker net kg over the period. This is Boord's payments._worker_totals
-    with every wage concern removed - no RateSetting lookup, no tier parsing,
-    no amount accumulation. The Owner app never computes wages."""
-    start_dt, end_dt = day_bounds(period_start, period_end)
-    query = select(HarvestRecord).where(
-        HarvestRecord.timestamp >= start_dt, HarvestRecord.timestamp <= end_dt)
-    worker_ids = _worker_ids_for_supplier(session, supplier_id)
-    if worker_ids is not None:
-        query = query.where(HarvestRecord.worker_id.in_(worker_ids))
-    totals: dict[str, dict] = {}
-    for r in session.exec(query).all():
-        if not r.worker_id:
-            continue
-        entry = totals.setdefault(r.worker_id, {"total_kg": 0.0})
-        entry["total_kg"] += r.weight_kg - r.deduction_kg
-    return totals
-
-
 @router.get("/summary")
 def dashboard_summary(period_start: date, period_end: date, supplier_id: Optional[int] = None,
                       boord: Session = Depends(get_boord_session)):
@@ -88,12 +68,16 @@ def dashboard_summary(period_start: date, period_end: date, supplier_id: Optiona
     active_workers = {r.worker_id for r in records if r.worker_id}
     active_blocks = {r.block_id for r in records if r.block_id}
 
-    crate_counts: dict[str, int] = {}
+    # Per-worker crates and net kg from the one scan above. This is Boord's
+    # payments._worker_totals with every wage concern removed - no
+    # RateSetting lookup, no tier parsing. The Owner app never computes wages.
+    totals: dict[str, dict] = {}
     for r in records:
-        if r.worker_id:
-            crate_counts[r.worker_id] = crate_counts.get(r.worker_id, 0) + 1
-
-    totals = _worker_kg_totals(boord, period_start, period_end, supplier_id)
+        if not r.worker_id:
+            continue
+        entry = totals.setdefault(r.worker_id, {"crates": 0, "total_kg": 0.0})
+        entry["crates"] += 1
+        entry["total_kg"] += r.weight_kg - r.deduction_kg
     workers_by_id = {w.id: w for w in boord.exec(select(Worker)).all()}
     suppliers_by_id = {s.id: s for s in boord.exec(select(Supplier)).all()}
     own_id = get_own_supplier_id(boord)
@@ -102,7 +86,7 @@ def dashboard_summary(period_start: date, period_end: date, supplier_id: Optiona
     workers = []
     for worker_id, data in totals.items():
         w = workers_by_id.get(worker_id)
-        crates = crate_counts.get(worker_id, 0)
+        crates = data["crates"]
         workers.append({
             "worker_id": worker_id,
             "name": w.name if w else worker_id,

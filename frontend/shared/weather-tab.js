@@ -27,6 +27,7 @@ const LWWeatherTab = (() => {
   const MAX_METRICS = 2;
 
   let _data = null;
+  let _loadedAt = 0;
   let _bound = false;
   let _firstLoad = true;
   let _selectedYears = new Set();
@@ -168,8 +169,11 @@ const LWWeatherTab = (() => {
   // fetchHistory: (years) => Promise<data>, where `years` is an array of
   // calendar years to fetch (empty/omitted on the first call, which lets the
   // server pick the most recent one it has).
-  async function load(fetchHistory) {
+  // `force` bypasses the freshness window (pull-to-refresh, reconnect).
+  async function load(fetchHistory, { force = false } = {}) {
     _fetchHistory = fetchHistory;
+    if (!force && _data && Boord.isFresh(_loadedAt)) return;
+    if (!_data) LWCharts.loadingState(document.getElementById("weatherChart"), "Loading the weather record...");
     let data;
     try {
       data = await fetchHistory([..._selectedYears]);
@@ -181,6 +185,7 @@ const LWWeatherTab = (() => {
     }
     Boord.setOffline(false);
     _absorb(data);
+    _loadedAt = Date.now();
     // The server chooses the year on a first load (the most recent it has),
     // so adopt what it actually sent rather than assuming.
     if (_firstLoad && data.years_returned && data.years_returned.length) {

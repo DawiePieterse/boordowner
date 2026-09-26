@@ -26,7 +26,7 @@ from db import get_boord_session, get_owner_session, own_farm_block_ids
 from models_boord import Block, HarvestRecord, SystemSetting
 from models_owner import HistoricalAnnualYield, HistoricalHarvest
 from routers.analysis import _block_sort_key
-from timeutil import season_year_for, to_local
+from timeutil import day_bounds, season_year_for, to_local
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -85,7 +85,10 @@ def historical_harvest_data_report(boord: Session = Depends(get_boord_session),
         day_kg[key] = day_kg.get(key, 0.0) + h.kg
         if h.estimated:
             estimated_blocks.add(h.block_id)
-    for r in boord.exec(select(HarvestRecord)).all():
+    # Bounded to this season's anchor onward - see routers/analysis.py.
+    season_start_dt = day_bounds(date(current_year, anchor_month, anchor_day),
+                                 date(current_year, anchor_month, anchor_day))[0]
+    for r in boord.exec(select(HarvestRecord).where(HarvestRecord.timestamp >= season_start_dt)).all():
         local_ts = to_local(r.timestamp)
         if local_ts is None:
             continue

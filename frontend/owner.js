@@ -54,15 +54,16 @@ function bindCollapsibles() {
 }
 
 // Shows one tab and loads it. Also called once at startup to land on the
-// Dashboard.
-function activateTab(name) {
+// Dashboard. A tab tap reuses figures loaded within Boord.TAB_FRESH_MS;
+// pull-to-refresh and coming back online pass force (see refreshActiveTab).
+function activateTab(name, { force = false } = {}) {
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".tab-content").forEach((c) => c.classList.add("hidden"));
   const panel = document.getElementById(`tab-${name}`);
   if (panel) panel.classList.remove("hidden");
-  if (name === "analysis") loadAnalysis();
-  else if (name === "weather") loadWeather();
-  else if (name === "risk") loadRisk();
+  if (name === "analysis") loadAnalysis({ force });
+  else if (name === "weather") loadWeather({ force });
+  else if (name === "risk") loadRisk({ force });
 }
 
 // The one download this app offers: every harvest figure on file, 1987 to
@@ -98,13 +99,14 @@ function bindTabs() {
   });
 }
 
-async function loadAnalysis() {
+async function loadAnalysis(opts) {
   await LWAnalysisTab.load(
     () => Boord.api("/api/analysis/summary"),
+    opts,
   );
 }
 
-async function loadWeather() {
+async function loadWeather(opts) {
   await LWWeatherTab.load(
     // Like /api/risk/forecast, this does real work the default 8s network
     // timeout was never sized for: it may first sync the newest hours from
@@ -126,25 +128,25 @@ async function loadWeather() {
   );
 }
 
-async function loadRisk() {
+async function loadRisk(opts) {
   await LWRiskTab.load(
-    // Both risk calls need a real budget, not just the forecast. summary
-    // runs the whole analysis AND reads every weather hour from the first
-    // reference season onward - it was left on the 8s default purely
-    // because forecast was the slower of the two when they were written,
-    // which stopped being true once a farm backfilled forty years.
+    // Needs a real budget, not the 8s default: this runs the whole
+    // analysis, reads every weather hour from the first reference season
+    // onward, and fetches a live forecast for the Harvest Forecast card
+    // it carries under "forecast".
     () => Boord.api("/api/risk/summary", { timeoutMs: 45000 }),
-    // This call does real work the default 8s network timeout isn't built for.
-    () => Boord.api("/api/risk/forecast", { timeoutMs: 45000 }),
+    opts,
   );
 }
 
+// A deliberate refresh (pull-to-refresh, coming back online): always
+// refetches, whatever the tab loaded a moment ago.
 function refreshActiveTab() {
   const active = document.querySelector(".tab-btn.active");
   const tab = active ? active.dataset.tab : "dashboard";
-  if (tab === "analysis") return loadAnalysis();
-  if (tab === "weather") return loadWeather();
-  if (tab === "risk") return loadRisk();
+  if (tab === "analysis") return loadAnalysis({ force: true });
+  if (tab === "weather") return loadWeather({ force: true });
+  if (tab === "risk") return loadRisk({ force: true });
   return refreshDashboard();
 }
 
@@ -412,7 +414,11 @@ function init() {
   LWRiskTab.bind();
 
   Boord.offlineBanner("Offline - data may be out of date");
-  Boord.onOfflineChange = () => { refreshActiveTab(); };
+  // Reload when the connection comes back - the browser's own event, not
+  // Boord.onOfflineChange: that also fires when a request times out and
+  // flips the banner on, which used to re-fire the very request that had
+  // just spent 45s timing out.
+  window.addEventListener("online", () => { refreshActiveTab(); });
   LWPTR.attach(async () => {
     await loadSuppliers();
     await refreshActiveTab();
@@ -429,17 +435,22 @@ function init() {
   refreshAppData();
 }
 
+// Settings, suppliers and the dashboard's four calls all go out at once:
+// nothing the dashboard shows waits on the other two (the Season preset
+// reads _systemSettings only when tapped, and falls back to the cached
+// copy), so serialising them cost two round-trips before any live figure.
 async function refreshAppData() {
-  try {
-    _systemSettings = await Boord.api("/api/system-settings");
-    localStorage.setItem("boord_cached_settings", JSON.stringify(_systemSettings));
-    updateBannerFarmName();
-  } catch (e) {
-    if (Boord.isNetworkError(e)) Boord.setOffline(true);
-  }
+  const settings = (async () => {
+    try {
+      _systemSettings = await Boord.api("/api/system-settings");
+      localStorage.setItem("boord_cached_settings", JSON.stringify(_systemSettings));
+      updateBannerFarmName();
+    } catch (e) {
+      if (Boord.isNetworkError(e)) Boord.setOffline(true);
+    }
+  })();
   updateBannerWeather();
-  await loadSuppliers();
-  await refreshDashboard();
+  await Promise.all([settings, loadSuppliers(), refreshDashboard()]);
 }
 
 if ("serviceWorker" in navigator) {

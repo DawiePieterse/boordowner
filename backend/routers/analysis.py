@@ -7,7 +7,7 @@ from sqlmodel import Session, select
 from db import get_boord_session, get_owner_session, own_farm_block_ids
 from models_boord import Block, HarvestRecord, SystemSetting
 from models_owner import HistoricalHarvest
-from timeutil import season_day, season_year_for, to_local
+from timeutil import day_bounds, season_day, season_year_for, to_local
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
@@ -70,7 +70,13 @@ def build_analysis_summary(boord: Session, owner: Session) -> dict:
         day_kg[(h.season_year, h.block_id, h.harvest_date)] += h.kg
         if h.estimated:
             estimated_blocks.add(h.block_id)
-    for r in boord.exec(select(HarvestRecord)).all():
+    # Boord keeps every season ever picked, so the WHERE below is what stops
+    # this growing by a full season's crates every year. It only bounds the
+    # scan (nothing before this season's anchor can belong to it); the
+    # per-record anchor test that follows is still the single gate.
+    season_start_dt = day_bounds(date(current_year, anchor_month, anchor_day),
+                                 date(current_year, anchor_month, anchor_day))[0]
+    for r in boord.exec(select(HarvestRecord).where(HarvestRecord.timestamp >= season_start_dt)).all():
         local_ts = to_local(r.timestamp)
         if local_ts is None:
             continue

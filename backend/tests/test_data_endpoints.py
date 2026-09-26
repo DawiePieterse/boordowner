@@ -116,6 +116,21 @@ def test_analysis_weather_risk_render(client):
     assert w.status_code == 200 and "points" in w.json()   # empty owner.db -> empty points, still 200
     rk = client.get("/api/risk/summary")
     assert rk.status_code == 200 and rk.json()["driver_count"] == 4
+    # The Harvest Forecast rides along in the summary (one driver-state
+    # build per tab open), and is null rather than a 500 if its build fails.
+    assert "scenarios" in rk.json()["forecast"]
+
+
+def test_risk_summary_survives_a_failing_forecast(client, monkeypatch):
+    import routers.risk as risk_module
+
+    def boom(*a, **k):
+        raise RuntimeError("forecast broke")
+    monkeypatch.setattr(risk_module, "build_harvest_forecast", boom)
+    rk = client.get("/api/risk/summary")
+    assert rk.status_code == 200
+    assert rk.json()["forecast"] is None
+    assert rk.json()["driver_count"] == 4
 
 
 # --------------------------------------------------------------------------- #

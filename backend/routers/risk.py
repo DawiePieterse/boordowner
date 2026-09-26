@@ -361,7 +361,7 @@ def _compute_driver_state(boord: Session, owner: Session) -> dict:
     }
 
 
-def build_risk_summary(boord: Session, owner: Session) -> dict:
+def build_risk_summary(boord: Session, owner: Session, state: dict = None) -> dict:
     """Critical Season Risk Indicator: a transparent 0-100 score of how this
     season's weather compares to the reference seasons (REFERENCE_START_YEAR
     onward) on the four factors (see DRIVERS above) that best correlated
@@ -403,8 +403,12 @@ def build_risk_summary(boord: Session, owner: Session) -> dict:
     A component whose calendar window hasn't closed yet for the current
     season is left out of the sum (never assumed to be zero risk) - see
     "known_count" on each season entry.
+
+    `state` lets the caller share one _compute_driver_state() (a full
+    HarvestRecord scan plus every reference-season weather hour) with
+    build_harvest_forecast() - see risk_summary().
     """
-    state = _compute_driver_state(boord, owner)
+    state = state if state is not None else _compute_driver_state(boord, owner)
     current_year = state["current_year"]
     all_years = state["all_years"]
     value_by_year = state["value_by_year"]
@@ -461,8 +465,20 @@ def build_risk_summary(boord: Session, owner: Session) -> dict:
 @router.get("/summary")
 def risk_summary(boord: Session = Depends(get_boord_session),
                  owner: Session = Depends(get_owner_session)):
-    """Risk tab data - see build_risk_summary()."""
-    return build_risk_summary(boord, owner)
+    """Risk tab data - see build_risk_summary() - with the Harvest Forecast
+    (build_harvest_forecast()) under "forecast", so one tab open builds the
+    shared driver state once rather than twice over two parallel requests.
+    The forecast is null if its build itself fails; the score, back-test
+    and methodology never depend on it."""
+    sync_recent_weather(owner, boord)  # keep "actual" as fresh as the Weather tab would
+    state = _compute_driver_state(boord, owner)
+    out = build_risk_summary(boord, owner, state=state)
+    try:
+        out["forecast"] = build_harvest_forecast(boord, owner, state=state)
+    except Exception as e:  # noqa: BLE001 - the rest of the tab must still render
+        print(f"[risk] forecast build failed: {e!r}", flush=True)
+        out["forecast"] = None
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -641,7 +657,7 @@ def _last_7_days_kg(boord: Session) -> list:
             for i in range(7)]
 
 
-def build_harvest_forecast(boord: Session, owner: Session) -> dict:
+def build_harvest_forecast(boord: Session, owner: Session, state: dict = None) -> dict:
     """Three kg predictions for the CURRENT season - Favorable/Expected/
     Unfavorable - rather than one falsely-precise number, since most of a
     season's outcome still depends on weather that hasn't happened yet.
@@ -679,8 +695,9 @@ def build_harvest_forecast(boord: Session, owner: Session) -> dict:
     scenario card's sparkline: a glance at recent real pace next to the
     season-long kg prediction, not a projection input.
     """
-    sync_recent_weather(owner, boord)  # keep "actual" as fresh as the Weather tab would
-    state = _compute_driver_state(boord, owner)
+    if state is None:
+        sync_recent_weather(owner, boord)  # keep "actual" as fresh as the Weather tab would
+        state = _compute_driver_state(boord, owner)
     last_7_days_kg = _last_7_days_kg(boord)  # before Boord is released below
 
     forecast_unavailable = False

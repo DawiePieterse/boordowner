@@ -51,6 +51,12 @@ const LWCharts = (() => {
     container.innerHTML = `<div class="text-sm text-slate-400 p-8 text-center">${msg}</div>`;
   }
 
+  // While a tab's first fetch is in flight - an empty card reads as broken.
+  function loadingState(container, msg = "Loading...") {
+    container.innerHTML = `<div class="text-sm text-slate-400 p-8 text-center">
+      <i class="fa-solid fa-spinner fa-spin"></i> ${msg}</div>`;
+  }
+
   // Light-yellow -> dark-red heat scale (a hand-rolled stand-in for
   // matplotlib's YlOrRd, used by both heatmap() and bubbleMatrix()).
   const HEAT_STOPS = [[255, 255, 229], [255, 237, 160], [254, 178, 76], [240, 59, 32], [128, 0, 38]];
@@ -545,9 +551,31 @@ const LWCharts = (() => {
   // <img> approach would need - and browsers refuse to read pixels back
   // out of a canvas that was drawn from a foreignObject image ("tainted
   // canvas"), so that simpler approach doesn't work here.
+  // html2canvas + jsPDF are ~560 KB between them and only ever needed
+  // after a "download as PDF" tap, so they are fetched then rather than
+  // blocking every page open. The service worker keeps them in the offline
+  // shell, so once this device has loaded them online they work offline.
+  const PDF_LIBS = ["./shared/vendor/html2canvas/html2canvas.min.js", "./shared/vendor/jspdf/jspdf.umd.min.js"];
+  let _pdfLibsPromise = null;
+  function _ensurePdfLibs() {
+    if (window.jspdf && window.jspdf.jsPDF && window.html2canvas) return Promise.resolve();
+    if (!_pdfLibsPromise) {
+      _pdfLibsPromise = Promise.all(PDF_LIBS.map((src) => new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = src;
+        s.onload = resolve;
+        s.onerror = () => reject(new Error(`could not load ${src}`));
+        document.head.appendChild(s);
+      }))).catch((e) => { _pdfLibsPromise = null; throw e; });
+    }
+    return _pdfLibsPromise;
+  }
+
   async function exportPDF(el, { title = "", filename = "chart.pdf" } = {}) {
-    if (!window.jspdf || !window.jspdf.jsPDF || !window.html2canvas) {
-      alert("PDF export isn't available offline until this page has loaded online at least once.");
+    try {
+      await _ensurePdfLibs();
+    } catch (e) {
+      alert("PDF export isn't available offline until this page has made a PDF online at least once.");
       return;
     }
     const canvas = await window.html2canvas(el, {
@@ -606,5 +634,5 @@ const LWCharts = (() => {
     pdf.save(filename);
   }
 
-  return { lineChart, dualAxisLineChart, barChart, stackedBarChart, heatmap, bubbleMatrix, rangeBarChart, sparkline, legend, exportPDF, PALETTE };
+  return { lineChart, dualAxisLineChart, barChart, stackedBarChart, heatmap, bubbleMatrix, rangeBarChart, sparkline, legend, emptyState, loadingState, exportPDF, PALETTE };
 })();

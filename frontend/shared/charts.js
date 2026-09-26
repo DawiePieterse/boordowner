@@ -444,17 +444,17 @@ const LWCharts = (() => {
 
   // One horizontal range-bar per row, e.g. "first pick -> last pick" spans.
   // rows: [{label, start, end, color, annotation}] - start/end share a
-  // single x-domain (season_day: 1 = 1 Aug) across all rows, with month
-  // gridlines/labels computed from that same anchor.
-  function rangeBarChart(container, { rows, rowHeight = 40, barHeight = 20 }) {
+  // single x-domain (season_day: 1 = the season anchor) across all rows.
+  // anchor: {month, day} (1-based month) the season_days count from - the
+  // payload's season_anchor. Month gridlines/labels fall on the 1st of each
+  // month after it, so they stay right whatever the farm's season start is.
+  function rangeBarChart(container, { rows, anchor = { month: 8, day: 1 }, rowHeight = 40, barHeight = 20 }) {
     if (!rows.length) return emptyState(container);
     const xMin = 1;
+    // At least ~5 months of axis, so a short early-season span isn't
+    // stretched across the whole width.
     const xMax = Math.max(...rows.map((r) => r.end), 154);
-    // Season-day of the 1st of each month, Aug (day 1) through the
-    // following Jan (day 154), on the same fixed non-leap reference year
-    // used elsewhere for season-day <-> date conversions.
-    const MONTH_TICKS = [[1, "Aug"], [32, "Sep"], [62, "Oct"], [93, "Nov"], [123, "Dec"], [154, "Jan"]]
-      .filter(([d]) => d <= xMax + 5);
+    const monthTicks = _seasonMonthTicks(anchor, xMax + 5);
 
     const padL = 64, padR = 190, padT = 12, padB = 26;
     const plotH = rows.length * rowHeight;
@@ -463,7 +463,7 @@ const LWCharts = (() => {
     const sx = (x) => padL + ((x - xMin) / (xMax - xMin)) * w;
 
     const children = [];
-    MONTH_TICKS.forEach(([d, label]) => {
+    monthTicks.forEach(([d, label]) => {
       const px = sx(d);
       children.push(svg("line", { x1: px, x2: px, y1: padT, y2: padT + plotH, stroke: "#e2e8f0", "stroke-width": 1 }));
       children.push(text(px, padT + plotH + 18, label, { "text-anchor": "middle", fill: "#64748b", style: "font-size:12px" }));
@@ -492,6 +492,25 @@ const LWCharts = (() => {
                                preserveAspectRatio: "xMinYMin meet" }, children);
     container.innerHTML = "";
     container.appendChild(root);
+  }
+
+  // [season_day, "Mon"] for the 1st of each month from the anchor onward,
+  // up to maxDay. Uses the same fixed non-leap reference year as the tabs'
+  // season-day <-> date conversions (and UTC, so no DST hour creeps in).
+  const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function _seasonMonthTicks(anchor, maxDay) {
+    const m = parseInt(anchor && anchor.month, 10) || 1;
+    const d = parseInt(anchor && anchor.day, 10) || 1;
+    const start = Date.UTC(2001, m - 1, d);
+    const ticks = [];
+    for (let k = 0; k <= 12; k++) {
+      const first = Date.UTC(2001, m - 1 + k, 1);
+      if (first < start) continue;   // anchor mid-month: first tick is next month's 1st
+      const seasonDay = Math.round((first - start) / 86400000) + 1;
+      if (seasonDay > maxDay) break;
+      ticks.push([seasonDay, SHORT_MONTHS[(m - 1 + k) % 12]]);
+    }
+    return ticks;
   }
 
   // A compact inline sparkline - no axes, no legend, just the shape of a

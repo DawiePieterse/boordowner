@@ -9,8 +9,9 @@ from db import get_boord_session, get_owner_session, weather_append_lock
 from models_owner import WeatherHistory
 from routers.historical import earliest_history_season
 from weather import (ARCHIVE_START_DATE, HISTORY_START_DATE, different_location, farm_coords,
-                      farm_coords_and_release, fetch_hourly_range, fetch_weather_cached,
-                      foreign_row_count, sync_recent_weather)
+                      cached_history_stat, farm_coords_and_release, fetch_hourly_range,
+                      fetch_weather_cached, foreign_row_count, invalidate_history_stats,
+                      sync_recent_weather)
 
 router = APIRouter(prefix="/api/weather", tags=["weather"])
 
@@ -73,10 +74,17 @@ def _years_on_file(owner: Session) -> list:
     are now only the years being charted while this list drives the filter
     row - all forty of them have to be tickable whether or not they are
     currently drawn.
+
+    A full scan (strftime on the column can't use its index), so the answer
+    is cached until WeatherHistory next changes - see
+    weather.cached_history_stat.
     """
-    rows = owner.exec(
-        select(func.strftime("%Y", WeatherHistory.timestamp)).distinct()).all()
-    return sorted(int(y) for y in rows if y)
+    def compute():
+        rows = owner.exec(
+            select(func.strftime("%Y", WeatherHistory.timestamp)).distinct()).all()
+        return sorted(int(y) for y in rows if y)
+    # A copy, so no caller can edit the cached list in place.
+    return list(cached_history_stat(owner, ("years_on_file",), compute))
 
 
 def build_weather_history(owner: Session, boord: Session,
@@ -157,9 +165,12 @@ def build_weather_history(owner: Session, boord: Session,
     # corrected after weather had already been downloaded, and the chart
     # above is a blend of two places until the backfill is re-run. Reported
     # here because the Weather tab is where somebody would notice the
-    # numbers looking wrong and have no way to find out why.
+    # numbers looking wrong and have no way to find out why. Another full
+    # scan, so cached like the years list above.
     coords = farm_coords(boord)
-    hours_elsewhere = foreign_row_count(owner, *coords) if coords else 0
+    hours_elsewhere = cached_history_stat(
+        owner, ("foreign_row_count",) + tuple(coords),
+        lambda: foreign_row_count(owner, *coords)) if coords else 0
 
     return {
         "metrics": _metrics_public(),
@@ -275,6 +286,7 @@ def backfill_weather_history(years: Optional[int] = Query(None, ge=1, le=200),
         owner.exec(delete(WeatherHistory).where(different_location(lat, lon)))
         owner.add_all(rows)
         owner.commit()
+    invalidate_history_stats()
     return {"imported": len(rows), "start_date": start.isoformat(), "end_date": end.isoformat(),
             "years": end.year - start.year + 1,
             "lat": lat, "lon": lon,

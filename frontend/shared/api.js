@@ -8,7 +8,7 @@ const API_BASE = "";
 const Boord = {
   // Bump on every deploy that touches frontend code. Shown in the header so
   // it's obvious whether a device's cached copy is up to date.
-  VERSION: "1.5.4",
+  VERSION: "1.5.5",
 
   // A device whose WiFi is up but that cannot actually reach the farm server
   // gets no error from fetch() - the request just hangs until the OS gives up,
@@ -68,6 +68,35 @@ const Boord = {
     }
   },
 
+  // The load scaffold the Analysis, Risk and Weather tabs share: runs
+  // fetchFn through cachedLoad under `key` and keeps the offline banner
+  // truthful. `noun` names the figures in the banner ("analysis", "risk
+  // figures", "weather"); `label` names the tab in the console and the
+  // toast ("Analysis" -> "Could not load analysis data"). Resolves to
+  // cachedLoad's {data, cached, at}, or null when there is nothing to show
+  // - the banner or toast has already said why.
+  async loadTab({ key, fetchFn, noun, label }) {
+    let result;
+    try {
+      result = await Boord.cachedLoad(key, fetchFn);
+    } catch (e) {
+      if (Boord.isNetworkError(e)) {
+        // api() has already raised the banner.
+        Boord.setOfflineBannerText(`Offline - no saved ${noun} on this device yet`);
+        return null;
+      }
+      console.error(`${label} load failed:`, e);
+      Boord.toast(`Could not load ${label.toLowerCase()} data`);
+      return null;
+    }
+    // Saved figures came back only because the server couldn't be reached.
+    Boord.setOffline(result.cached);
+    if (result.cached) {
+      Boord.setOfflineBannerText(`Offline - showing ${noun} from ${Boord.describeAge(result.at)}`);
+    }
+    return result;
+  },
+
   // "moments ago" / "12 min ago" / "3 hours ago" / a full date-time.
   describeAge(at) {
     const mins = Math.round((Date.now() - at) / 60000);
@@ -101,6 +130,14 @@ const Boord = {
     }
   },
 
+  _errorDetail(text) {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed.detail === "string") return parsed.detail;
+    } catch (e) { /* not JSON - the body text is the detail */ }
+    return text;
+  },
+
   async api(path, { method = "GET", body, isForm = false, timeoutMs } = {}) {
     const headers = {};
     let payload = body;
@@ -108,11 +145,29 @@ const Boord = {
       headers["Content-Type"] = "application/json";
       payload = JSON.stringify(body);
     }
-    const res = await Boord._fetchWithTimeout(
-      `${API_BASE}${path}`, { method, headers, body: payload }, timeoutMs);
+    // Offline bookkeeping lives here rather than at every call site: a
+    // request that never got an answer means the server is unreachable,
+    // and ANY answer - a 500 included - means it is reachable. Screens only
+    // set the flag themselves when it comes from somewhere else (saved
+    // figures served by cachedLoad).
+    let res;
+    try {
+      res = await Boord._fetchWithTimeout(
+        `${API_BASE}${path}`, { method, headers, body: payload }, timeoutMs);
+    } catch (e) {
+      if (Boord.isNetworkError(e)) Boord.setOffline(true);
+      throw e;
+    }
+    Boord.setOffline(false);
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(`${res.status} ${text}`);
+      // The message keeps its "<status> <body>" shape; status and detail
+      // ride along so callers need not parse it back out. detail is
+      // FastAPI's JSON "detail" when there is a string one, else the body.
+      const err = new Error(`${res.status} ${text}`);
+      err.status = res.status;
+      err.detail = Boord._errorDetail(text);
+      throw err;
     }
     const contentType = res.headers.get("content-type") || "";
     if (contentType.includes("application/json")) return res.json();
@@ -175,8 +230,8 @@ const Boord = {
   },
 
   // Slim amber banner pinned under the header telling the user the screen is
-  // offline. Wired to the browser's online/offline events, but screens should
-  // ALSO call Boord.setOffline(true/false) from their own request results:
+  // offline. Wired to the browser's online/offline events, and api() also
+  // calls Boord.setOffline(true/false) from every request's outcome:
   // navigator.onLine only reflects the radio, not whether the farm server is
   // actually reachable (WiFi up + server unreachable is the common case).
   offlineBanner(message) {

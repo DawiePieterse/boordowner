@@ -116,6 +116,21 @@ _BANDS = [(25, "Low"), (50, "Moderate"), (75, "Elevated"), (101, "High")]
 FORECAST_API_DAYS = 16       # what we request (API maximum, counts today)
 FORECAST_HORIZON_DAYS = 15   # usable future days that actually come back
 
+# How far out a forecast day is trusted at full weight. Day 1 counts as-is;
+# trust falls linearly to zero at day FORECAST_TRUST_DAYS + 1, where the
+# day is the same historical-scenario assumption the "assumed" segment
+# uses. Without this, a 30mm shower the model pencils in for day 12 (and
+# drops again the next run) swung the kg prediction by thousands from one
+# morning to the next - rain forecasts beyond about a week carry little
+# skill, and treating them as measured fact was the main source of that
+# day-to-day noise. See _forecast_weight() and _project_driver().
+FORECAST_TRUST_DAYS = 7
+
+# Predictions are shown to the nearest 500 kg: the kg line is fitted on
+# ~10 seasons at R^2 ~ 0.46, so anything finer implies a precision the
+# fit doesn't have and makes small daily drifts look like real changes.
+KG_ROUNDING = 500
+
 
 def _band(score: float) -> str:
     for ceiling, name in _BANDS:
@@ -489,6 +504,12 @@ def _segment_day_count(segment) -> int:
     return (segment[1] - segment[0]).days + 1 if segment else 0
 
 
+def _forecast_weight(lead_days: int) -> float:
+    """Trust in a forecast `lead_days` ahead (1 = tomorrow), 1.0 down to
+    0.0 - see FORECAST_TRUST_DAYS."""
+    return max(0.0, 1.0 - (lead_days - 1) / FORECAST_TRUST_DAYS)
+
+
 def _scenario_raw_value(hist_values: list, direction: str, scenario: str):
     """The three what-if raw values a driver could plausibly take, drawn
     straight from the reference seasons already on file: "expected" is
@@ -510,7 +531,10 @@ def _project_driver(d: dict, state: dict, forecast_by_date: dict, horizon: int) 
     points). `horizon` is how many days past today the forecast segment may
     claim - the caller derives it from what the forecast provider actually
     returned (0 when unavailable), so this never counts a forecast day the
-    data doesn't cover. If either the actual or forecast segment has days
+    data doesn't cover. Each forecast day is blended with the scenario's
+    own per-day assumption by _forecast_weight() of its lead time, so a
+    far-out forecast day counts for little more than the historical
+    assumption it would otherwise be. If either the actual or forecast segment has days
     but no usable data (a genuine gap - a down sensor or an unreachable
     forecast provider), the whole driver falls back to the pure
     historical-scenario value for its entire window instead of blending a
@@ -530,9 +554,17 @@ def _project_driver(d: dict, state: dict, forecast_by_date: dict, horizon: int) 
         _driver_value(_date_range_rows(state["by_date"], *segs["actual"]), d,
                       today=today, station_today=state.get("station_today"))
         if segs["actual"] else None)
-    forecast_value = _driver_value(_date_range_rows(forecast_by_date, *segs["forecast"]), d) if segs["forecast"] else None
+    # Per forecast day: (lead time, that day's own value - None where the
+    # provider returned nothing for it).
+    forecast_day_values = []
+    if segs["forecast"]:
+        day = segs["forecast"][0]
+        while day <= segs["forecast"][1]:
+            forecast_day_values.append(((day - today).days, _driver_value(forecast_by_date.get(day, ()), d)))
+            day += timedelta(days=1)
 
-    data_gap = (actual_days > 0 and actual_value is None) or (forecast_days > 0 and forecast_value is None)
+    data_gap = ((actual_days > 0 and actual_value is None)
+                or (forecast_days > 0 and all(v is None for _, v in forecast_day_values)))
     hist_values = state["hist_range"][d["key"]]
 
     if data_gap or not hist_values:
@@ -544,13 +576,21 @@ def _project_driver(d: dict, state: dict, forecast_by_date: dict, horizon: int) 
     scenarios = {}
     for s in ("favorable", "expected", "unfavorable"):
         scenario_value = _scenario_raw_value(hist_values, d["direction"], s)
-        if d["agg"] in _INTENSIVE_AGGS:
-            weighted = (actual_days * (actual_value or 0) + forecast_days * (forecast_value or 0)
+        intensive = d["agg"] in _INTENSIVE_AGGS
+        # What one day is assumed to contribute under this scenario: the
+        # scenario's own mean for an intensive driver, its share of the
+        # window total for an extensive one.
+        per_day_assumed = scenario_value if intensive else scenario_value / window_total_days
+        # A forecast day with no data counts as fully assumed (weight 0).
+        forecast_total = sum(
+            (w * v + (1 - w) * per_day_assumed) if v is not None else per_day_assumed
+            for lead, v in forecast_day_values for w in (_forecast_weight(lead),))
+        if intensive:
+            weighted = (actual_days * (actual_value or 0) + forecast_total
                         + assumed_days * scenario_value)
             scenarios[s] = weighted / window_total_days
         else:
-            rate = scenario_value / window_total_days
-            scenarios[s] = (actual_value or 0) + (forecast_value or 0) + rate * assumed_days
+            scenarios[s] = (actual_value or 0) + forecast_total + per_day_assumed * assumed_days
 
     return {"data_gap": False, "actual_days": actual_days, "forecast_days": forecast_days,
             "assumed_days": assumed_days, "scenarios": scenarios}
@@ -608,7 +648,8 @@ def build_harvest_forecast(boord: Session, owner: Session) -> dict:
 
     Each of the four DRIVERS' still-open window is projected forward (see
     _project_driver()): actual data where it exists, a real Open-Meteo
-    forecast for the next 15 days, and a historical-scenario
+    forecast for the next 15 days (trusted fully for tomorrow and fading
+    to nothing past FORECAST_TRUST_DAYS), and a historical-scenario
     assumption (this driver's best/mean/worst of the reference seasons)
     for whatever's beyond that. Projected values are scored with the exact
     same _risk_points() used by the real Risk tab, so a scenario's 0-100
@@ -756,7 +797,9 @@ def build_harvest_forecast(boord: Session, owner: Session) -> dict:
         vs_avg_pct = None
         if regression:
             fitted = regression["intercept"] + regression["slope"] * score
-            predicted_kg = round(min(kg_hi, max(kg_lo, fitted)), 1)
+            # Rounded first (see KG_ROUNDING), then held to the recorded
+            # extremes so rounding can't push past the worst/best on file.
+            predicted_kg = round(min(kg_hi, max(kg_lo, round(fitted / KG_ROUNDING) * KG_ROUNDING)), 1)
             if reference_avg_kg:
                 vs_avg_pct = round((predicted_kg - reference_avg_kg) / reference_avg_kg * 100, 1)
         scenarios_out[s] = {"risk_score": score, "band": _band(score),

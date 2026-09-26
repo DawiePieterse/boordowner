@@ -287,3 +287,45 @@ def test_build_risk_summary_empty_dbs(client):
     assert out["driver_count"] == 4
     assert len(out["drivers"]) == 4
     assert out["current_year"] == 2026
+
+
+def test_forecast_weight_fades_with_lead_time():
+    from routers.risk import FORECAST_TRUST_DAYS, _forecast_weight
+    assert _forecast_weight(1) == 1.0
+    assert 0 < _forecast_weight(FORECAST_TRUST_DAYS) < 1
+    assert _forecast_weight(FORECAST_TRUST_DAYS + 1) == 0.0
+    assert _forecast_weight(15) == 0.0
+
+
+def test_project_driver_forecast_fades_toward_assumed():
+    """A far-out forecast day is nearly all historical assumption; a day-1
+    forecast is taken as-is. So the same 30mm shower moves the projection
+    a lot when it's tomorrow and hardly at all when it's 12 days out."""
+    from routers.risk import _forecast_weight
+    state = {"current_year": 2025, "today": date(2025, 10, 5),
+             "by_date": defaultdict(list), "hist_range": {"k": [100.0, 200.0]}}
+    for d in range(1, 6):
+        state["by_date"][date(2025, 10, d)].append(
+            SimpleNamespace(timestamp=datetime(2025, 10, d, 12), v=0.0))
+    ext = {"key": "k", "window_md": ((10, 1), (10, 20)), "field": "v", "agg": "sum",
+           "direction": "lower_is_worse"}
+    rate = 150.0 / 20  # expected per-day share of the 20-day window
+
+    def project(shower_day):
+        fc = defaultdict(list)
+        for lead in range(1, 16):
+            day = date(2025, 10, 5) + timedelta(days=lead)
+            fc[day].append(SimpleNamespace(timestamp=datetime(day.year, day.month, day.day, 12),
+                                           v=30.0 if lead == shower_day else 0.0))
+        return _project_driver(ext, state, fc, 15)
+
+    base = project(shower_day=None)
+    assert base["forecast_days"] == 15 and base["assumed_days"] == 0
+    # No rain forecast at all: day 1 contributes 0, days 8+ the full assumed rate.
+    expected_base = sum(_forecast_weight(l) * 0.0 + (1 - _forecast_weight(l)) * rate for l in range(1, 16))
+    assert abs(base["scenarios"]["expected"] - expected_base) < 1e-6
+
+    near = project(shower_day=1)["scenarios"]["expected"] - base["scenarios"]["expected"]
+    far = project(shower_day=12)["scenarios"]["expected"] - base["scenarios"]["expected"]
+    assert abs(near - 30.0) < 1e-6
+    assert far == 0.0

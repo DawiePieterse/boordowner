@@ -355,8 +355,9 @@ const LWRiskTab = (() => {
         before that only block 7 was cropping, so earlier totals reflect a young orchard rather
         than its weather.</li>
       <li>For whatever part of a factor's time window is still ahead, the forecast uses a real
-        weather forecast (up to 15 days out) where available, and the ${forecast.reference_label}
-        historical range beyond that - see each factor's "Basis" column for exactly how much of
+        weather forecast where available - trusted in full for tomorrow and fading out over the
+        following week, since rain forecasts beyond that carry little skill - and the
+        ${forecast.reference_label} historical range beyond that - see each factor's "Basis" column for exactly how much of
         each is actual, forecast, or assumed. Once a factor's window has no assumed days left it is
         marked "locked in" and greyed out: its value is settled for the season, so the same number
         appears under all three scenarios. As the season runs on, more factors lock in and the three
@@ -365,7 +366,8 @@ const LWRiskTab = (() => {
         different real years, not one real season that was worst on everything at once - so its
         score can land outside anything a real season reached. Predictions are held to the best and
         worst harvests actually on record rather than running the line off past them, so the two
-        extremes read as "about as good/bad as it has ever gone", not exact figures.</li>
+        extremes read as "about as good/bad as it has ever gone", not exact figures. All three are
+        rounded to the nearest 500 kg for the same reason.</li>
       <li>This is a description of what the historical pattern implies about this season's specific
         weather, not a guarantee of what will be harvested.</li>`;
   }

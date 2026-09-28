@@ -219,9 +219,13 @@ still depends on weather that hasn't happened yet.
 
 For whatever part of a factor's window is still ahead, the forecast uses
 a real weather forecast for the next 15 days and a historical
-best/average/worst assumption beyond that. The **Basis** column under the
-three cards shows exactly how much of each factor is which — e.g.
-*"14d actual + 16d forecast + 16d assumed"*. If the weather service can't
+best/average/worst assumption beyond that. The forecast is trusted in full
+for tomorrow and less each day after, down to nothing from day 8 — beyond a
+week, especially for rain, it is too unreliable to move the figure. The
+**Basis** column under the three cards shows exactly how much of each
+factor is which — e.g. *"14d actual + 15d forecast + 16d assumed"*.
+Predictions are rounded to the nearest 500 kg, so the Expected figure moves
+in steady steps rather than drifting every morning. If the weather service can't
 be reached, or a factor's own data has a genuine gap, that factor falls
 back to its historical range for the whole window and the row says so,
 rather than quietly treating missing data as "no risk."

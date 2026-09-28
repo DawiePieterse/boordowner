@@ -286,9 +286,14 @@ the app splits the remaining days three ways, and the **Basis** column in
 the table shows you exactly how the split fell (e.g. *"14d actual + 15d
 forecast + 16d assumed"*):
 
-1. **Actual** — days already past, using real recorded weather.
+1. **Actual** — days already past, using real recorded weather. If the farm
+   has its own weather station set up, *today's* rain so far comes from the
+   station's rain gauge instead of the weather service, and today's peak
+   temperature is whichever of the two is higher — the station measures
+   this exact spot. Every earlier day is the weather service's record,
+   since the station keeps no history.
 2. **Forecast** — up to **15 days ahead**, using a real short-range weather
-   forecast.
+   forecast, **trusted less the further out it looks** (see below).
 3. **Assumed** — everything beyond that, filled in from the historical
    range. This is where the three scenarios differ: **Favorable** assumes
    the best value seen in any reference season, **Expected** the average,
@@ -297,6 +302,28 @@ forecast + 16d assumed"*):
 Each scenario's projected weather is then scored through the **exact same
 0–100 scoring** used for real seasons, so a scenario's score is directly
 comparable to any past year's.
+
+**How much the forecast is trusted.** A weather forecast is good for the
+next day or two and poor beyond about a week — rain most of all. So each
+forecast day is a mix of what the forecast says and what that scenario would
+otherwise assume for the day, and the mix shifts toward the assumption the
+further ahead the day is:
+
+| Forecast day | Counts the forecast | Counts the historical assumption |
+|---|---|---|
+| Tomorrow | 100% | 0% |
+| Day 2 | 86% | 14% |
+| Day 4 | 57% | 43% |
+| Day 7 | 14% | 86% |
+| Day 8 onward | 0% | 100% |
+
+This was added because the Expected figure used to jump by thousands of kg
+from one morning to the next with nothing happening on the farm. The cause
+was the far end of the forecast: a 30 mm shower pencilled in for day 12,
+then dropped again the next morning, went straight into the season's rain
+total as if it had already fallen. Now a far-off forecast day barely moves
+the prediction, while tomorrow's still counts in full — and each day counts
+in full anyway once it has actually happened and becomes *actual*.
 
 **Turning a score into kilograms.** The score is converted to kg by a
 straight line fitted through the (risk score, harvest total) pairs from
@@ -314,6 +341,18 @@ the line run out past them (at the unfavorable end, it otherwise ran
 straight past zero into negative kg). So read the outer two cards as
 *"about as good, or as bad, as it has ever gone here"* — not as exact
 figures.
+
+**Predictions are shown to the nearest 500 kg.** The kg line is fitted on
+only about ten seasons and explains roughly half of the swing between them,
+so a figure like 31,247 kg would claim a precision the method does not have
+— and would make small daily drifts look like real changes. The figures
+therefore move in 500 kg steps, and a step usually means real weather has
+been recorded, not that the forecast changed its mind.
+
+**The small chart under Expected** is this farm's own actual picking for
+the last 7 days (own blocks, net of deductions). It is not part of the
+prediction — it is there so the season-long figure and the current pace
+can be read side by side.
 
 > **The Unfavorable scenario is harsher than any real season.** It combines
 > each factor's own worst historical *year* — four different years, not one

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
 
 from db import get_boord_session, get_owner_session, own_farm_block_ids
+from logs import log
 from models_boord import HarvestRecord
 from models_owner import HistoricalAnnualYield, WeatherHistory
 from routers.analysis import kg_by_year_month, season_day_kg
@@ -473,8 +474,10 @@ def risk_summary(boord: Session = Depends(get_boord_session),
     out = build_risk_summary(boord, owner, state=state)
     try:
         out["forecast"] = build_harvest_forecast(boord, owner, state=state)
-    except Exception as e:  # noqa: BLE001 - the rest of the tab must still render
-        print(f"[risk] forecast build failed: {e!r}", flush=True)
+    except Exception:  # noqa: BLE001 - the rest of the tab must still render
+        # With the traceback: the card only says "unavailable", so this
+        # line in data/owner.log is the one record of why.
+        log.exception("[risk] forecast build failed")
         out["forecast"] = None
     return out
 

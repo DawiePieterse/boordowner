@@ -151,10 +151,10 @@ if "!CURTAG!"=="!NEWTAG!" (
 ) else (
     echo.
     echo ==^> Verifying the signature on !NEWTAG!...
-    :: --raw prints GPG's machine-readable status lines. A VALIDSIG line means
-    :: the signature is good; requiring OUR fingerprint on that line is the
-    :: part that matters, because a plain "good signature" only proves the tag
-    :: was signed by *some* key present in this machine's keyring.
+    rem --raw prints GPG's machine-readable status lines. A VALIDSIG line means
+    rem the signature is good; requiring OUR fingerprint on that line is the
+    rem part that matters, because a plain "good signature" only proves the tag
+    rem was signed by *some* key present in this machine's keyring.
     set "VERIFY_OUT=%TEMP%\boord_owner_verify.txt"
     git verify-tag --raw "!NEWTAG!" > "!VERIFY_OUT!" 2>&1
     findstr /C:"VALIDSIG" "!VERIFY_OUT!" > "!VERIFY_OUT!.sig"
@@ -193,9 +193,9 @@ if "!CURTAG!"=="!NEWTAG!" (
 
     echo.
     echo ==^> Updating to !NEWTAG!...
-    :: --force so a half-finished edit on the server can't block a deploy.
-    :: Anything under data\ is gitignored and is left alone; only tracked
-    :: code files are reset to exactly what the signed tag contains.
+    rem --force so a half-finished edit on the server can't block a deploy.
+    rem Anything under data\ is gitignored and is left alone; only tracked
+    rem code files are reset to exactly what the signed tag contains.
     git checkout --force "!NEWTAG!"
     if errorlevel 1 (
         echo.

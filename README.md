@@ -32,6 +32,7 @@ backend/
   models_owner.py    WeatherHistory, HistoricalHarvest, HistoricalAnnualYield
   models_boord.py    read-only field-subset mirrors of Boord's Block/Worker/Supplier/…
   weather.py         Open-Meteo fetch/parse + WeatherHistory sync (session-split)
+  logs.py            data/owner.log: errors + tracebacks (the task has no console)
   timeutil.py        day_bounds / to_local, copied from Boord
   excel_io.py        parse_uploaded_table, for the historical imports
   migrate.py         shim: run_migrations() -> init_owner_db()
@@ -104,6 +105,12 @@ Publishing the app is `tailscale serve`'s job — see **Access** below.
 
 `update_owner_server.bat` installs the newest **signed** release and
 restarts.
+
+**Errors go to `data\owner.log`.** The scheduled task has no console, so
+anything the server reports - a failed Harvest Forecast build, any request
+that errored - is written there with its traceback (rotated at 1 MB, three
+old files kept). When something on a tab reads "unavailable", that file
+says why.
 
 ### Access
 

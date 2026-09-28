@@ -20,8 +20,11 @@ from sqlalchemy import text
 
 import config
 from db import boord_engine, init_owner_db
+from logs import log, setup_logging
 from routers import (analysis, boord_data, dashboard, historical,
                      historical_report, risk, weather)
+
+setup_logging()
 
 app = FastAPI(title="Boord Owner")
 
@@ -94,7 +97,7 @@ def _wait_for_boord() -> None:
         except Exception as e:  # noqa: BLE001 - retried, then re-raised as-is
             if time.monotonic() >= deadline:
                 raise
-            print(f"[startup] Boord's database isn't ready yet ({e}); retrying in 10s", flush=True)
+            log.warning("[startup] Boord's database isn't ready yet (%s); retrying in 10s", e)
             time.sleep(10)
 
 

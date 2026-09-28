@@ -110,3 +110,24 @@ def test_forecast_projects_the_open_windows_and_stays_within_the_record(pipeline
         assert lo <= s["predicted_kg"] <= hi
         assert s["predicted_kg"] % risk_module.KG_ROUNDING == 0 or s["predicted_kg"] in (lo, hi)
     assert sc["favorable"]["predicted_kg"] >= sc["expected"]["predicted_kg"] >= sc["unfavorable"]["predicted_kg"]
+
+
+def test_a_failed_forecast_build_is_written_to_the_log(pipeline, monkeypatch):
+    # The Scheduled Task has no console, so data/owner.log is the only place
+    # this failure can be read afterwards - with its traceback.
+    import logs
+
+    def boom(*a, **k):
+        raise RuntimeError("forecast went bang")
+    monkeypatch.setattr(risk_module, "build_harvest_forecast", boom)
+    logs.setup_logging()
+
+    body = pipeline.get("/api/risk/summary").json()
+    assert body["forecast"] is None
+    assert body["seasons"]                        # the rest of the tab still renders
+    for h in logs.log.handlers:
+        h.flush()
+    with open(logs.LOG_PATH, encoding="utf-8") as f:
+        text = f.read()
+    assert "[risk] forecast build failed" in text
+    assert "RuntimeError: forecast went bang" in text and "Traceback" in text

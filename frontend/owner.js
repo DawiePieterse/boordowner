@@ -79,6 +79,7 @@ function activateTab(name, { force = false } = {}) {
   const panel = document.getElementById(`tab-${name}`);
   if (panel) panel.classList.remove("hidden");
   if (name === "analysis") loadAnalysis({ force });
+  else if (name === "estimate") LWEstimateTab.load({ force });
   else if (name === "weather") loadWeather({ force });
   else if (name === "risk") loadRisk({ force });
 }
@@ -146,15 +147,24 @@ async function loadWeather(opts) {
   );
 }
 
+// /api/risk/summary, shared: the Risk tab and the Estimate tab's weather
+// model cross-check both read it, and a tab switch while one is in flight
+// must join it rather than start the server's heaviest call a second time.
+// Needs a real budget, not the 8s default: this runs the whole analysis,
+// reads every weather hour from the first reference season onward, and
+// fetches a live forecast for the Harvest Forecast it carries under
+// "forecast".
+let _riskInFlight = null;
+function fetchRiskSummary() {
+  if (!_riskInFlight) {
+    _riskInFlight = Boord.api("/api/risk/summary", { timeoutMs: 45000 })
+      .finally(() => { _riskInFlight = null; });
+  }
+  return _riskInFlight;
+}
+
 async function loadRisk(opts) {
-  await LWRiskTab.load(
-    // Needs a real budget, not the 8s default: this runs the whole
-    // analysis, reads every weather hour from the first reference season
-    // onward, and fetches a live forecast for the Harvest Forecast card
-    // it carries under "forecast".
-    () => Boord.api("/api/risk/summary", { timeoutMs: 45000 }),
-    opts,
-  );
+  await LWRiskTab.load(fetchRiskSummary, opts);
 }
 
 // A deliberate refresh (pull-to-refresh, coming back online): always
@@ -163,6 +173,7 @@ function refreshActiveTab() {
   const active = document.querySelector(".tab-btn.active");
   const tab = active ? active.dataset.tab : "dashboard";
   if (tab === "analysis") return loadAnalysis({ force: true });
+  if (tab === "estimate") return LWEstimateTab.load({ force: true });
   if (tab === "weather") return loadWeather({ force: true });
   if (tab === "risk") return loadRisk({ force: true });
   return refreshDashboard();
@@ -455,6 +466,7 @@ function init() {
   LWAnalysisTab.bind();
   LWWeatherTab.bind();
   LWRiskTab.bind();
+  LWEstimateTab.bind({ fetchRisk: fetchRiskSummary });
 
   Boord.offlineBanner("Offline - data may be out of date");
   // Reload when the connection comes back - the browser's own event, not

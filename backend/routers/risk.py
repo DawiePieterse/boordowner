@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends
@@ -699,6 +699,10 @@ def build_harvest_forecast(boord: Session, owner: Session, state: dict = None) -
     last_7_days_kg = _last_7_days_kg(boord)  # before Boord is released below
 
     forecast_unavailable = False
+    # Told apart from forecast_unavailable because the fix is different:
+    # "nobody has said where this farm is" is a setting in Boord, not a
+    # provider that might be back in a minute.
+    no_location = False
     forecast_by_date = defaultdict(list)
     try:
         # Released before the forecast fetch below - nothing after this
@@ -706,6 +710,7 @@ def build_harvest_forecast(boord: Session, owner: Session, state: dict = None) -
         # weather.farm_coords_and_release().
         coords = farm_coords_and_release(boord)
         if coords is None:
+            no_location = True
             # No farm location set - there is nothing to forecast for. This
             # would also be caught by the except below (unpacking None raises),
             # but relying on that would report "the provider is unreachable"
@@ -792,6 +797,15 @@ def build_harvest_forecast(boord: Session, owner: Session, state: dict = None) -
         if all(p is not None for p in comp_scores):
             hist_pairs.append((round(sum(comp_scores), 1), state["kg_by_year"].get(year, 0.0)))
     regression = _ols_fit([p[0] for p in hist_pairs], [p[1] for p in hist_pairs])
+    if regression:
+        # How far the fitted seasons themselves typically sit off the line
+        # (residual standard deviation, n-2 degrees of freedom). In-sample
+        # and descriptive only - it says how loosely the line fits the
+        # seasons it was drawn through, not how far off a new season can be.
+        n = len(hist_pairs)
+        regression["resid_sd_kg"] = round((sum(
+            (kg - (regression["intercept"] + regression["slope"] * score)) ** 2
+            for score, kg in hist_pairs) / (n - 2)) ** 0.5, 1) if n >= 3 else None
     reference_avg_kg = sum(p[1] for p in hist_pairs) / len(hist_pairs) if hist_pairs else None
     # The fitted seasons' own kg span. A scenario score outside the fitted
     # score range would otherwise run the line off into kg totals no season
@@ -822,7 +836,12 @@ def build_harvest_forecast(boord: Session, owner: Session, state: dict = None) -
 
     return {
         "current_year": state["current_year"],
+        # When this was worked out (naive UTC + "Z", like every server time
+        # this app sends). The Estimate tab stores it with the figures it
+        # snapshots, so a saved version says how fresh they were.
+        "built_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
         "forecast_unavailable": forecast_unavailable,
+        "no_location": no_location,
         "forecast_horizon_end": forecast_horizon_end.isoformat() if forecast_horizon_end else None,
         "reference_avg_kg": round(reference_avg_kg, 1) if reference_avg_kg is not None else None,
         "reference_label": _reference_label(state["historical_years"]),
@@ -833,6 +852,10 @@ def build_harvest_forecast(boord: Session, owner: Session, state: dict = None) -
         # would credit it to seasons it was never computed over.
         "regression_label": _reference_label(regression_years),
         "reference_season_count": len(hist_pairs),
+        # The fitted seasons' own kg span - every prediction is held inside
+        # it, so a scenario sitting on either end is a clamp, not a fit.
+        "fitted_kg_range": ({"low": round(kg_lo, 1), "high": round(kg_hi, 1)}
+                            if hist_pairs else None),
         "regression": regression,
         "scenarios": scenarios_out,
         "drivers": driver_data,

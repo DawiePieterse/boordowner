@@ -93,3 +93,67 @@ class WeatherHistory(SQLModel, table=True):
     # (rows predating this column) and counts as a different location.
     lat: Optional[float] = None
     lon: Optional[float] = None
+
+
+class YieldEstimate(SQLModel, table=True):
+    """One version of the owner's pre-season crop estimate for a season:
+    a kg-per-tree figure per block, judged in the orchard and set against
+    that block's own history (see routers/estimate.py). A season usually
+    has several - the January estimate, a revision after fruit set, one
+    mid-picking - and all of them are kept, so the owner can see how the
+    call moved and how the first one compared with what was picked.
+
+    Unlike every other owner table this one IS written by the app: it is
+    the owner's own judgement, entered on the Estimate tab. There is still
+    no sign-in - the tailnet is the access control (README.md, Access)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    season_year: int = Field(index=True)  # labelled like Boord's seasons: the year it starts in
+    name: str = ""
+    notes: str = ""
+    created_at: datetime   # naive UTC, like every datetime here but WeatherHistory's
+    updated_at: datetime
+    # The Risk tab's weather-driven Harvest Forecast as it stood when this
+    # version was saved (current season only). Kept because it cannot be
+    # rebuilt later: the live forecast and today's station reading are never
+    # stored, and next season the kg line refits with this season in it.
+    # Sent by the client from the figures it was showing - the save does not
+    # re-run the model. All NULL = saved without one (or before these columns
+    # existed; _ensure_owner_columns adds them as NULL to older rows).
+    forecast_favorable_kg: Optional[float] = None
+    forecast_expected_kg: Optional[float] = None
+    forecast_unfavorable_kg: Optional[float] = None
+    forecast_built_at: Optional[datetime] = None   # naive UTC, when the server built that forecast
+    forecast_live: Optional[bool] = None           # False = the live weather forecast was unavailable
+    forecast_settled: Optional[int] = None         # weather factors with nothing left to assume
+
+
+class YieldEstimateBlock(SQLModel, table=True):
+    """One block's line in a YieldEstimate. The tree count is copied from
+    Boord's block register when the line is made and kept here, so a later
+    change to the register (trees removed, a block split) doesn't silently
+    rewrite what an old estimate said. Estimated kg is trees x kg_per_tree,
+    worked out on read rather than stored."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    estimate_id: int = Field(index=True)  # YieldEstimate.id
+    block_id: str   # Boord's block label, e.g. "8a" (see HistoricalHarvest.block_id)
+    trees: int = 0
+    kg_per_tree: Optional[float] = None   # NULL = not estimated yet
+    note: str = ""
+
+
+class YieldEstimatePack(SQLModel, table=True):
+    """One line of a YieldEstimate version's pack-out mix: what share of the
+    net picked kg the owner expects to go to a channel and pack type, and
+    how many kg one carton of it takes (give-away included). The owner's
+    judgement, stored with the version like YieldEstimateBlock's tree counts,
+    so editing next season's mix never rewrites what an old version said.
+    Estimation only: cartons are worked out on read, and nothing here is a
+    packing record."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    estimate_id: int = Field(index=True)   # YieldEstimate.id
+    position: int = 0                      # display order
+    channel: str                           # free text, e.g. "Export sea"
+    pack_type: str = ""                    # e.g. "4.5 kg"
+    kg_per_carton: Optional[float] = None  # NULL = not cartoned (juice, rejects)
+    share_pct: float = 0.0                 # % of the estimate's net picked kg
+    note: str = ""

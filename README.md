@@ -11,16 +11,25 @@ and reaching it is the whole of the access control (see **Access** below).
 
 A single `uvicorn main:app` service that:
 
-- serves a four-tab read-only frontend — **Dashboard** (the Admin
-  Dashboard's figures minus wages), **Analysis**, **Weather**, **Risk**;
+- serves a five-tab frontend — **Dashboard** (the Admin Dashboard's
+  figures minus wages), **Analysis**, **Estimate**, **Weather**, **Risk**;
 - reads Boord's live `boord.db` **read-only** for the harvest, lot,
   worker, block and supplier data;
-- owns a separate database for the weather record and the seasons before
-  Boord.
+- owns a separate database for the weather record, the seasons before
+  Boord, and the owner's crop estimates.
 
-Whoever opens it sees the summary the Admin Dashboard shows and the three
-analytical tabs. Boord's setup and detail screens are not here — those live
-in Boord and were never part of this app.
+Whoever opens it sees the summary the Admin Dashboard shows and the
+analytical tabs. **Estimate** is the one screen that writes: the owner's
+per-block crop estimate for a season (kg per tree against each block's
+history, times its trees), saved as versions in `owner.db`, and tracked
+against the picking once the season is running. Around it: each version's
+pack-out mix turned into kg and cartons per channel (estimation only — no
+pallets, transport or markets), the Risk tab's weather-driven Harvest
+Forecast as a cross-check (snapshotted with each saved version), and the
+past seasons whose weather so far came closest. With no sign-in, anyone
+who can reach the app can edit it — see **Access** below. Boord's setup
+and detail screens are not here — those live in Boord and were never part
+of this app.
 
 ## Layout
 
@@ -29,7 +38,9 @@ backend/
   main.py            FastAPI app: startup checks, router registration, static mount
   config.py          paths + env (OWNER_DB_PATH, BOORD_DB_PATH, OWNER_PORT)
   db.py              two engines: owner.db (read-write) + boord.db (read-only, PRAGMA query_only)
-  models_owner.py    WeatherHistory, HistoricalHarvest, HistoricalAnnualYield
+  models_owner.py    WeatherHistory, HistoricalHarvest, HistoricalAnnualYield,
+                     YieldEstimate + YieldEstimateBlock + YieldEstimatePack
+                     (the Estimate tab's versions, block lines and pack-out mix)
   models_boord.py    read-only field-subset mirrors of Boord's Block/Worker/Supplier/…
   weather.py         Open-Meteo fetch/parse + WeatherHistory sync (session-split)
   timeutil.py        day_bounds / to_local, copied from Boord
@@ -41,11 +52,14 @@ backend/
     analysis.py      /api/analysis/summary
     weather.py       /api/weather/{current,history,history/backfill}
     risk.py          /api/risk/{summary,forecast}
+    estimate.py      /api/estimate (GET view, POST/PUT/DELETE versions, /{id}/export XLSX)
+    analogs.py       /api/estimate/analogs (similar past seasons; reads owner.db
+                     weather only, never fetches)
     historical.py    /api/historical-*/import
     historical_report.py   /api/reports/historical-harvest-data (the XLSX workbook)
   tests/             pytest: data endpoints, Boord isolation, ported risk-function tests
 frontend/
-  index.html         the four tabs
+  index.html         the five tabs
   owner.js           startup, tab routing, dashboard offline cache
   service-worker.js  offline shell, cache prefix "boord-owner-"
   shared/            vendored from Boord: api.js (no credentials sent),
@@ -307,8 +321,10 @@ migrates it on every startup. This app opens it read-only
 
 **This app owns `data/owner.db`** — `WeatherHistory`, `HistoricalHarvest`,
 `HistoricalAnnualYield`, all three copied verbatim from Boord (git
-`2226750`) so the import scripts stay valid. Schema init is `create_all` on
-an explicit three-table list plus an additive column top-up
+`2226750`) so the import scripts stay valid, and the Estimate tab's own
+`YieldEstimate`, `YieldEstimateBlock` and `YieldEstimatePack`. Schema init
+is `create_all` on an explicit six-table list (`db._OWNER_TABLES`) plus an
+additive column top-up
 (`db._ensure_owner_columns`) — no
 Alembic; the schema is small and single-writer. Import the pre-Boord
 history with `scripts/import_historical_*.py` (the weather ones need
@@ -334,16 +350,19 @@ readout and the per-crate dispatch stamp) and never touched `WeatherHistory`.
 ## Tests
 
 ```bash
-cd backend && .venv/bin/python -m pytest        # 74 tests, well under a second
+cd backend && .venv/bin/python -m pytest        # 134 tests, a few seconds
 ```
 
 | File | Covers |
 | --- | --- |
 | `test_data_endpoints.py` | every route answering without credentials, the wage-free dashboard shape, the own-farm supplier filter, sorting and derived per-block figures, the season anchor, own-farm block scoping, the XLSX workbook |
 | `test_boord_schema.py` | the mirror and the boot check, against a real `../Boord` checkout — skipped when there isn't one |
-| `test_boord_isolation.py` | writes refused (ORM *and* raw SQL), connections released, schema-drift detection, owner.db holding only its own three tables, the additive-column upgrade path |
+| `test_boord_isolation.py` | writes refused (ORM *and* raw SQL), connections released, schema-drift detection, owner.db holding only its own six tables, the additive-column upgrade path (including an owner.db from before the pack-out table and forecast-snapshot columns) |
 | `test_weather_and_history.py` | no Boord connection open during a fetch, graceful degradation when Open-Meteo is down, the historical CSV imports |
 | `test_risk_functions.py` | the Risk/Forecast maths, ported from Boord's `scripts/selftest.py` |
+| `test_risk_pipeline.py` | the Risk score and Harvest Forecast end to end on seeded seasons, including the fields the Estimate tab snapshots (`built_at`, `no_location`, `resid_sd_kg`, `fitted_kg_range`) |
+| `test_estimate.py` | per-block reference figures, version lifecycle and validation, the in-season projection, pack-out arithmetic (against the farm's own "%" sheet) and validation, the weather-model cross-check and snapshots, farm totals, the XLSX export, and that neither viewing nor saving runs the weather model or the season scan |
+| `test_analogs.py` | similar past seasons: same-calendar-days comparison, ties, the candidate pool (young orchard, old-orchard seasons, missing weather), block figures, timing descriptors, stale/future/empty weather, scaling of running totals, no network and Boord released, the weather cache vs a new harvest import |
 
 The rest of that selftest — Boord's Alembic migration chain and its backup
 snapshots — was left behind

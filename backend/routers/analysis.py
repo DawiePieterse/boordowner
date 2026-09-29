@@ -109,6 +109,38 @@ def kg_by_year_month(day_kg: dict) -> dict:
     return year_month_kg
 
 
+def block_season_kg(owner: Session, season: dict) -> tuple:
+    """Per-block season totals, {block_id: {season_year: kg}}, however each
+    season was recorded, plus the set of seasons that exist only as annual
+    totals. Built from season_day_kg()'s result so the caller's view of
+    "this season's crates" is the same one. Shared by the Analysis tab's
+    per-block/variety trends and the Estimate tab's reference figures.
+
+    Seasons before the daily record began (2012-2019) exist only as
+    per-block season totals (HistoricalAnnualYield, block_id set; the older
+    whole-farm rows carry block_id None and can't be placed on a block).
+    They extend the per-block trends back to the replanting without touching
+    anything that needs dates (season pace, season length, monthly). The
+    frontend leaves annual-only seasons OUT of a block's "historical
+    average": in 2012-2015 block 7 was the only block bearing at all (see
+    routers/risk.py's REGRESSION_START_YEAR), so averaging those seasons in
+    would score every replanted block against its own sapling years."""
+    blocks, day_kg = season["blocks"], season["day_kg"]
+    block_year_kg: dict = defaultdict(lambda: defaultdict(float))
+    for (year, block_id, d), kg in day_kg.items():
+        if block_id:
+            block_year_kg[block_id][year] += kg
+
+    annual_only_years: set = set()
+    for a in owner.exec(select(HistoricalAnnualYield)).all():
+        if a.block_id and a.block_id in blocks and a.season_year not in block_year_kg[a.block_id]:
+            block_year_kg[a.block_id][a.season_year] += a.kg
+            annual_only_years.add(a.season_year)
+    # A year that some block has daily rows for is daily-tracked, full stop.
+    annual_only_years -= {k[0] for k in day_kg}
+    return block_year_kg, annual_only_years
+
+
 def build_analysis_summary(boord: Session, owner: Session) -> dict:
     """Historical (2020-2025, from HistoricalHarvest) vs current-season
     (from HarvestRecord) comparisons for the Analysis tab: season pace,
@@ -191,28 +223,7 @@ def build_analysis_summary(boord: Session, owner: Session) -> dict:
         if avg_at_same_point else None
 
     # --- Per-block yield trends -------------------------------------------
-    block_year_kg: dict = defaultdict(lambda: defaultdict(float))
-    for (year, block_id, d), kg in day_kg.items():
-        if block_id:
-            block_year_kg[block_id][year] += kg
-
-    # Seasons before the daily record began (2012-2019) exist only as
-    # per-block season totals (HistoricalAnnualYield, block_id set; the
-    # older whole-farm rows carry block_id None and can't be placed on a
-    # block). They extend the per-block and per-variety trends back to the
-    # replanting without touching anything that needs dates (season pace,
-    # season length, monthly). Each is flagged annual_only, and the
-    # frontend leaves them OUT of a block's "historical average": in
-    # 2012-2015 block 7 was the only block bearing at all (see
-    # routers/risk.py's REGRESSION_START_YEAR), so averaging those seasons
-    # in would score every replanted block against its own sapling years.
-    annual_only_years: set = set()
-    for a in owner.exec(select(HistoricalAnnualYield)).all():
-        if a.block_id and a.block_id in blocks and a.season_year not in block_year_kg[a.block_id]:
-            block_year_kg[a.block_id][a.season_year] += a.kg
-            annual_only_years.add(a.season_year)
-    # A year that some block has daily rows for is daily-tracked, full stop.
-    annual_only_years -= set(years)
+    block_year_kg, annual_only_years = block_season_kg(owner, season)
 
     # by_year carries kg/kg_ha/kg_tree for every year including the current
     # one - the frontend derives "this season vs historical average" from it

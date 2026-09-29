@@ -4,7 +4,9 @@ Two engines, on purpose:
 
   owner_engine - data/owner.db, READ-WRITE. This process is its only writer.
                  Holds WeatherHistory, HistoricalHarvest,
-                 HistoricalAnnualYield.
+                 HistoricalAnnualYield, and the owner's own crop
+                 estimates (YieldEstimate, YieldEstimateBlock,
+                 YieldEstimatePack).
 
   boord_engine - Boord's data/boord.db, READ-ONLY. Boord is the sole writer
                  and migrates that file on its own startup, so every read
@@ -28,7 +30,8 @@ import config
 # which is exactly why init_owner_db() has to pass an explicit table list.
 from models_boord import Block, Supplier
 from models_owner import (HistoricalAnnualYield, HistoricalHarvest,
-                          WeatherHistory)
+                          WeatherHistory, YieldEstimate, YieldEstimateBlock,
+                          YieldEstimatePack)
 
 # --------------------------------------------------------------------------- #
 # Owner DB - read/write
@@ -109,6 +112,9 @@ _OWNER_TABLES = [
     WeatherHistory.__table__,
     HistoricalHarvest.__table__,
     HistoricalAnnualYield.__table__,
+    YieldEstimate.__table__,
+    YieldEstimateBlock.__table__,
+    YieldEstimatePack.__table__,
 ]
 
 # Serialises the append in weather.sync_recent_weather(): two tab-opens can
@@ -148,7 +154,7 @@ def _ensure_owner_columns() -> None:
 
 
 def init_owner_db() -> None:
-    """Create the three owner tables if missing, then top up columns.
+    """Create the owner tables if missing, then top up columns.
 
     The explicit `tables=` list is load-bearing: models_boord registers its
     read-only mirror classes on the SAME SQLModel.metadata, so a bare

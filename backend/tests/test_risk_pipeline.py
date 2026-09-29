@@ -110,3 +110,19 @@ def test_forecast_projects_the_open_windows_and_stays_within_the_record(pipeline
         assert lo <= s["predicted_kg"] <= hi
         assert s["predicted_kg"] % risk_module.KG_ROUNDING == 0 or s["predicted_kg"] in (lo, hi)
     assert sc["favorable"]["predicted_kg"] >= sc["expected"]["predicted_kg"] >= sc["unfavorable"]["predicted_kg"]
+
+
+def test_forecast_says_why_it_is_unavailable_and_when_it_was_built(pipeline):
+    """The Estimate tab snapshots these with a saved version: it needs the
+    time the figures were built, the fit's typical miss, and to tell "no
+    farm location" apart from "provider down"."""
+    f = pipeline.get("/api/risk/summary").json()["forecast"]
+    assert f["no_location"] is True   # the fixture farm has no GPS
+    assert f["built_at"].endswith("Z") and datetime.fromisoformat(f["built_at"][:-1])
+    reg = f["regression"]
+    # n=4 fitted seasons -> residual SD over n-2 degrees of freedom.
+    pairs = [(s["risk_score"], s["total_kg"]) for s in pipeline.get("/api/risk/summary").json()["seasons"]
+             if s["year"] in REFERENCE]
+    resid = [kg - (reg["intercept"] + reg["slope"] * sc) for sc, kg in pairs]
+    assert reg["resid_sd_kg"] == round((sum(r * r for r in resid) / (len(pairs) - 2)) ** 0.5, 1)
+    assert f["fitted_kg_range"] == {"low": min(KG.values()), "high": max(KG.values())}

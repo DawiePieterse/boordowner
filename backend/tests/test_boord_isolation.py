@@ -207,7 +207,8 @@ def test_assert_boord_schema_accepts_empty_tables(tmp_path):
 # --------------------------------------------------------------------------- #
 def test_owner_db_holds_only_owner_tables(client):
     assert set(inspect(owner_engine).get_table_names()) == {
-        "weatherhistory", "historicalharvest", "historicalannualyield"}
+        "weatherhistory", "historicalharvest", "historicalannualyield",
+        "yieldestimate", "yieldestimateblock", "yieldestimatepack"}
 
 
 def test_init_owner_db_is_idempotent(client):
@@ -267,3 +268,24 @@ def test_startup_waits_for_boord_then_gives_up(monkeypatch):
     with pytest.raises(RuntimeError, match="BOORD_DB_PATH not found"):
         main._wait_for_boord()
     assert sleeps == [10, 10]   # 0s, 10s: retried; 20s: past the 15s deadline, raised
+
+
+def test_estimate_tables_and_columns_reach_an_older_owner_db(client):
+    """An owner.db from before the pack-out mix and the forecast snapshot:
+    the table is created, the columns are added, and a version saved before
+    either reads back with no mix and no snapshot."""
+    from sqlmodel import Session
+
+    with owner_engine.begin() as conn:
+        conn.execute(text("DROP TABLE yieldestimatepack"))
+        for col in ("forecast_favorable_kg", "forecast_expected_kg", "forecast_unfavorable_kg",
+                    "forecast_built_at", "forecast_live", "forecast_settled"):
+            conn.execute(text(f"ALTER TABLE yieldestimate DROP COLUMN {col}"))
+        conn.execute(text("INSERT INTO yieldestimate (season_year, name, notes, created_at, updated_at) "
+                          "VALUES (2026, 'Old', '', '2026-01-30 08:00:00', '2026-01-30 08:00:00')"))
+    init_owner_db()
+    assert "yieldestimatepack" in inspect(owner_engine).get_table_names()
+    assert "forecast_expected_kg" in {c["name"] for c in inspect(owner_engine).get_columns("yieldestimate")}
+    est = client.get("/api/estimate?season=2026").json()["estimate"]
+    assert est["name"] == "Old" and est["pack"] == [] and est["packout"] is None
+    assert est["forecast_snapshot"] is None

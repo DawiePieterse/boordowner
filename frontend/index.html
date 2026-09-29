@@ -18,6 +18,7 @@
 <script src="./shared/analysis-tab.js"></script>
 <script src="./shared/weather-tab.js"></script>
 <script src="./shared/risk-tab.js"></script>
+<script src="./shared/estimate-tab.js"></script>
 <script src="./shared/ptr.js"></script>
 <!-- html2canvas + jsPDF are loaded on the first "download as PDF" tap (charts.js), not here. -->
 </head>
@@ -40,6 +41,7 @@
   <div class="flex overflow-x-auto bg-white shadow sticky top-0 z-10">
     <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
     <button class="tab-btn" data-tab="analysis">Analysis</button>
+    <button class="tab-btn" data-tab="estimate">Estimate</button>
     <button class="tab-btn" data-tab="weather">Weather</button>
     <button class="tab-btn" data-tab="risk">Risk</button>
   </div>
@@ -106,6 +108,136 @@
             <tbody id="dash-blocks-rows"></tbody>
           </table>
         </div>
+      </div>
+    </div>
+
+    <!-- ESTIMATE -->
+    <div id="tab-estimate" class="tab-content hidden space-y-4">
+      <div class="bg-white rounded-xl shadow p-4 flex flex-wrap gap-3 items-end">
+        <div><label class="text-xs text-slate-500 block">Season</label><select id="estSeason" class="border border-slate-300 rounded-lg p-2 text-sm"></select></div>
+        <div><label class="text-xs text-slate-500 block">Version</label><select id="estVersion" class="border border-slate-300 rounded-lg p-2 text-sm"></select></div>
+        <button id="estNewBtn" class="px-3 py-2 bg-slate-200 rounded-lg text-sm" title="Copy this version to revise it">New version</button>
+        <button id="estExportBtn" class="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm"><i class="fa-solid fa-file-excel text-green-700"></i> Excel</button>
+        <button id="estDeleteBtn" class="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-red-700">Delete</button>
+      </div>
+
+      <div id="estKpiGrid" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
+
+      <div id="estProgress" class="bg-white rounded-xl shadow p-4 text-sm space-y-1 hidden"></div>
+
+      <div id="estEmpty" class="bg-white rounded-xl shadow p-4 text-sm space-y-3 hidden">
+        <p>No estimate yet for the <span id="estEmptySeason"></span> season.</p>
+        <p class="text-slate-500">It starts with every block in Boord's register and its tree count. Fill in kg per tree block by block, or fill them all from last season or a past average and then adjust the blocks that look different in the orchard.</p>
+        <button id="estStartBtn" class="px-3 py-2 bg-slate-200 rounded-lg text-sm">Start an estimate</button>
+      </div>
+
+      <div id="estEditor" class="bg-white rounded-xl shadow p-4 space-y-3 hidden">
+        <div class="flex flex-wrap gap-3 items-end">
+          <div><label class="text-xs text-slate-500 block">Name</label><input id="estName" type="text" maxlength="100" class="border border-slate-300 rounded-lg p-2 text-sm"></div>
+          <div><label class="text-xs text-slate-500 block">Fill kg/tree from</label>
+            <select id="estFillBasis" class="border border-slate-300 rounded-lg p-2 text-sm">
+              <option value="last_kg_tree">Last season</option>
+              <option value="avg5_kg_tree">Last 5 seasons' average</option>
+              <option value="best5_kg_tree">Best 5 of the last 10</option>
+              <option value="analog" disabled>Similar seasons (loading...)</option>
+            </select></div>
+          <div><label class="text-xs text-slate-500 block">Change %</label><input id="estFillPct" type="number" step="1" value="0" class="border border-slate-300 rounded-lg p-2 text-sm" style="width:5rem"></div>
+          <div><label class="text-xs text-slate-500 block">For</label>
+            <select id="estFillScope" class="border border-slate-300 rounded-lg p-2 text-sm">
+              <option value="empty">Blocks without a figure</option>
+              <option value="all">All blocks</option>
+            </select></div>
+          <button id="estFillBtn" class="px-3 py-2 bg-slate-200 rounded-lg text-sm">Fill</button>
+        </div>
+        <div class="text-xs text-slate-500">History columns are kg per tree on today's tree count (hover for kg). * = season still being picked.</div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead id="estHead"></thead>
+            <tbody id="estRows"></tbody>
+          </table>
+        </div>
+        <div class="flex flex-wrap gap-3 items-center justify-between">
+          <select id="estAddBlock" class="border border-slate-300 rounded-lg p-2 text-sm"></select>
+          <div id="estTotalRow" class="text-sm"></div>
+        </div>
+        <div><label class="text-xs text-slate-500 block">Notes</label><textarea id="estNotes" rows="2" maxlength="4000" class="border border-slate-300 rounded-lg p-2 text-sm w-full" placeholder="e.g. late start, short season; block 7 can swing either way"></textarea></div>
+
+        <div id="estPack" class="border-t pt-2 space-y-2">
+          <div class="font-semibold">Pack-out</div>
+          <div class="text-xs text-slate-500">Your share of the net picked kg per channel and pack type, and what one carton takes from the picked fruit (give-away included). Leave kg/carton empty for juice and rejects. These are your figures, not packing records - the app has none to check them against.</div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead id="estPackHead"></thead>
+              <tbody id="estPackRows"></tbody>
+            </table>
+          </div>
+          <div class="flex flex-wrap gap-2 items-center justify-between">
+            <button id="estPackAddBtn" class="px-3 py-2 bg-slate-200 rounded-lg text-sm">Add line</button>
+            <div id="estPackWarn" class="text-xs text-amber-700"></div>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm"><tbody id="estPackChannels"></tbody></table>
+          </div>
+          <datalist id="estPackChannelList"></datalist>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <button id="estSaveBtn" class="px-3 py-2 bg-slate-200 rounded-lg text-sm font-semibold">Save</button>
+          <span id="estDirty" class="text-xs text-red-700 hidden">Unsaved changes</span>
+        </div>
+      </div>
+
+      <div id="estXc" class="bg-white rounded-xl shadow p-4 text-sm space-y-2">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="font-semibold">Weather model cross-check</div>
+          <div id="estXcStatus" class="text-xs text-slate-500"></div>
+        </div>
+        <div id="estXcTiles" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
+        <div id="estXcBar" class="relative w-full bg-slate-100 rounded-full h-2 hidden"></div>
+        <p id="estXcVerdict"></p>
+        <div id="estXcNotes" class="text-xs text-amber-700"></div>
+        <button id="estXcRetry" class="px-3 py-2 bg-slate-200 rounded-lg text-sm hidden">Try again</button>
+        <div id="estXcHistory" class="overflow-x-auto"></div>
+        <button class="collapsible-header w-full flex justify-between items-center text-left" data-target="estXcAbout">
+          <span class="text-xs text-slate-500">What each number is built from</span>
+          <i class="fa-solid fa-chevron-down text-slate-400"></i>
+        </button>
+        <div id="estXcAbout" class="collapsible-body hidden text-xs text-slate-600 space-y-1">
+          <p><span class="font-semibold">Your estimate</span> is block by block, from what you see in the orchard - fruit set, the strong and weak blocks. It knows nothing about the weather still to come.</p>
+          <p><span class="font-semibold">The weather model</span> is the Risk tab's Harvest Forecast: a whole-farm figure from four weather factors, through a straight line fitted on past seasons (<span id="estXcFit"></span>). It cannot see tree numbers, blocks coming into bearing, fruit set or pests. Weather explains roughly a quarter to a half of this farm's swing from season to season.</p>
+          <p>Its figures are rounded to 500 kg and never go past the best or worst harvest on record since its fitted range began. Unfavorable combines each factor's own worst year; the Unfavorable-Favorable span is the model's worst- and best-weather cases, not an error band.</p>
+          <p>Until a factor's window closes, the days still ahead use a real weather forecast (trusted less over about a week) or the historical range - "settled" counts the factors whose whole window is now measured weather - until then the three cases still differ on them.</p>
+          <p>A gap between the two is a reason to look again in the orchard, not proof that either one is wrong. Both are net picked kg, not packed cartons. Each saved version keeps the model's figures as they were when it was saved.</p>
+        </div>
+      </div>
+
+      <div id="estAnalogs" class="bg-white rounded-xl shadow p-4 text-sm space-y-2">
+        <div class="font-semibold">Similar past seasons</div>
+        <div id="estAnalogStatus" class="text-xs text-slate-500"></div>
+        <div id="estAnalogFactors" class="flex flex-wrap gap-2"></div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead id="estAnalogHead"></thead>
+            <tbody id="estAnalogRows"></tbody>
+          </table>
+        </div>
+        <div id="estAnalogSummary"></div>
+        <button class="collapsible-header w-full flex justify-between items-center text-left" data-target="estAnalogAbout">
+          <span class="text-xs text-slate-500">How seasons are matched, and the limits</span>
+          <i class="fa-solid fa-chevron-down text-slate-400"></i>
+        </button>
+        <div id="estAnalogAbout" class="collapsible-body hidden text-xs text-slate-600 space-y-1">
+          <p>Seasons are matched on the four weather factors the Risk tab scores, over the same calendar days in every season. A factor whose window is still open this season is compared only up to the last day of weather on file, and counts for less the fewer days are in - so the list will shift through October and November.</p>
+          <p>Distance is in each factor's usual spread between seasons: under 0.5 is close, under 1 fair, beyond that loose. Weather explains roughly a quarter to a half of this farm's swing from season to season, so seasons with similar weather still came in very differently - read the range, not one figure. The Risk tab's Harvest Forecast (above) is the weather-driven kg figure.</p>
+          <p>Old-orchard seasons (whole-farm totals only) are compared as a percentage of their own era's average and never used for block figures; seasons while the replanted orchard was still coming into bearing are left out. Last season's crop is deliberately not a factor: this farm's record shows no alternate bearing.</p>
+          <p>Picking start is when a season reached 2% of its own total, and length runs from then to the last pick - descriptors only, for seasons with daily records. The weather is Open-Meteo's modelled grid for the farm's location, not the farm's own station.</p>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl shadow p-4">
+        <div class="font-semibold mb-1">Farm total by season</div>
+        <div class="text-xs text-slate-500 mb-2">Every season on file, with this estimate as the last bar. * = still being picked.</div>
+        <div id="estFarmChart" class="overflow-x-auto"></div>
       </div>
     </div>
 

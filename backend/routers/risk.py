@@ -7,7 +7,7 @@ from sqlmodel import Session, select
 
 from db import get_boord_session, get_owner_session, own_farm_block_ids
 from models_boord import HarvestRecord
-from models_owner import HistoricalAnnualYield, WeatherHistory
+from models_owner import ForecastSnapshot, HistoricalAnnualYield, WeatherHistory
 from routers.analysis import kg_by_year_month, season_day_kg
 from timeutil import day_bounds, to_local
 from weather import (farm_coords_and_release, farm_station_reading, fetch_forecast_hourly,
@@ -629,30 +629,45 @@ def _ols_fit(xs: list, ys: list):
     return {"slope": round(slope, 2), "intercept": round(intercept, 1), "r": round(r, 3), "n_seasons": n}
 
 
-def _last_7_days_kg(boord: Session) -> list:
-    """This farm's own net kg per day for the last 7 calendar days (today
-    inclusive), oldest first - the Harvest Forecast card's sparkline of
-    actual recent pace next to its season-long kg prediction. Own blocks
-    only (db.own_farm_block_ids) and net of deductions (weight_kg -
-    deduction_kg), same convention as build_analysis_summary(). A day with
-    no picking is 0.0, not missing, so the sparkline always has 7 points."""
-    own_blocks = own_farm_block_ids(boord)
-    today = date.today()
+def _expected_kg_history(owner: Session, today: date) -> list:
+    """The Expected scenario's kg as recorded on each of the last 7
+    calendar days (today inclusive), oldest first - the Harvest Forecast
+    card's sparkline. Only days with a snapshot appear (see
+    record_forecast_snapshot()), so a new install starts short and fills in
+    over the week."""
     start = today - timedelta(days=6)
-    start_dt, end_dt = day_bounds(start, today)
-    kg_by_day: dict = defaultdict(float)
-    rows = boord.exec(select(HarvestRecord).where(
-        HarvestRecord.timestamp >= start_dt, HarvestRecord.timestamp <= end_dt)).all()
-    for r in rows:
-        if r.block_id not in own_blocks:
-            continue
-        local_ts = to_local(r.timestamp)
-        if local_ts is None:
-            continue
-        kg_by_day[local_ts.date()] += (r.weight_kg - r.deduction_kg)
-    return [{"date": (start + timedelta(days=i)).isoformat(),
-             "kg": round(kg_by_day.get(start + timedelta(days=i), 0.0), 1)}
-            for i in range(7)]
+    rows = owner.exec(select(ForecastSnapshot).where(
+        ForecastSnapshot.snapshot_date >= start,
+        ForecastSnapshot.snapshot_date <= today).order_by(ForecastSnapshot.snapshot_date)).all()
+    return [{"date": r.snapshot_date.isoformat(), "kg": round(r.expected_kg, 1)} for r in rows]
+
+
+def record_forecast_snapshot(owner: Session, today: date, season_year: int, expected_kg) -> None:
+    """Store (or overwrite) today's Expected kg. Never raises: a failed
+    snapshot must not take the forecast down with it."""
+    if expected_kg is None:
+        return
+    try:
+        row = owner.exec(select(ForecastSnapshot).where(ForecastSnapshot.snapshot_date == today)).first()
+        if row is None:
+            row = ForecastSnapshot(snapshot_date=today, season_year=season_year,
+                                   expected_kg=expected_kg, built_at=datetime.utcnow())
+        else:
+            row.season_year, row.expected_kg, row.built_at = season_year, expected_kg, datetime.utcnow()
+        owner.add(row)
+        owner.commit()
+    except Exception:  # noqa: BLE001 - see docstring
+        owner.rollback()
+
+
+def snapshot_expected_forecast() -> None:
+    """Background-job entry point: build the forecast on sessions of its
+    own, which records today's snapshot as a side effect. Called from
+    main.py on a timer so the trend has a point for days nobody opens the
+    app."""
+    from db import boord_engine, owner_engine
+    with Session(boord_engine) as boord, Session(owner_engine) as owner:
+        build_harvest_forecast(boord, owner)
 
 
 def build_harvest_forecast(boord: Session, owner: Session, state: dict = None) -> dict:
@@ -687,16 +702,15 @@ def build_harvest_forecast(boord: Session, owner: Session, state: dict = None) -
     forecast_unavailable in the return value) rather than the endpoint
     failing outright.
 
-    The return value also carries last_7_days_kg - this farm's own actual
-    picking for the last 7 calendar days (see _last_7_days_kg()), unrelated
-    to the weather-driven scenarios above. It's there for the Expected
-    scenario card's sparkline: a glance at recent real pace next to the
-    season-long kg prediction, not a projection input.
+    The return value also carries expected_kg_history - the Expected kg
+    this forecast gave on each of the last 7 days (see
+    _expected_kg_history()), for the Expected card's sparkline. Each build
+    that had the live weather forecast records today's figure
+    (record_forecast_snapshot()); it is not a projection input.
     """
     if state is None:
         sync_recent_weather(owner, boord)  # keep "actual" as fresh as the Weather tab would
         state = _compute_driver_state(boord, owner)
-    last_7_days_kg = _last_7_days_kg(boord)  # before Boord is released below
 
     forecast_unavailable = False
     # Told apart from forecast_unavailable because the fix is different:
@@ -834,6 +848,13 @@ def build_harvest_forecast(boord: Session, owner: Session, state: dict = None) -
         scenarios_out[s] = {"risk_score": score, "band": _band(score),
                              "predicted_kg": predicted_kg, "vs_avg_pct": vs_avg_pct}
 
+    # Only a build with the live weather forecast is recorded: without it the
+    # figure is a pure historical scenario, and mixing that into the trend
+    # would draw a swing that is the outage, not the outlook.
+    if not forecast_unavailable:
+        record_forecast_snapshot(owner, state["today"], state["current_year"],
+                                 scenarios_out["expected"]["predicted_kg"])
+
     return {
         "current_year": state["current_year"],
         # When this was worked out (naive UTC + "Z", like every server time
@@ -859,7 +880,7 @@ def build_harvest_forecast(boord: Session, owner: Session, state: dict = None) -
         "regression": regression,
         "scenarios": scenarios_out,
         "drivers": driver_data,
-        "last_7_days_kg": last_7_days_kg,
+        "expected_kg_history": _expected_kg_history(owner, state["today"]),
     }
 
 

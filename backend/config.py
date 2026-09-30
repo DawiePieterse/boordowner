@@ -70,3 +70,10 @@ AI_PROVIDER = (os.environ.get("OWNER_AI_PROVIDER") or "gemini").strip().lower()
 AI_API_KEY = (os.environ.get("OWNER_AI_API_KEY") or "").strip()
 AI_ENDPOINT = (os.environ.get("OWNER_AI_ENDPOINT") or "").strip()
 AI_MODEL = (os.environ.get("OWNER_AI_MODEL") or "").strip()
+
+# How often the background job records the Harvest Forecast's Expected kg
+# for the Risk tab's last-7-days trend (see routers/risk.py,
+# record_forecast_snapshot). It overwrites the same day's row, so this only
+# sets how fresh the day's figure is and how soon a missed run is retried.
+# 0 = no background job (tests); a forecast build still records a snapshot.
+FORECAST_SNAPSHOT_HOURS = float(os.environ.get("FORECAST_SNAPSHOT_HOURS", "6"))

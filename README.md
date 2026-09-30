@@ -43,7 +43,8 @@ backend/
   db.py              two engines: owner.db (read-write) + boord.db (read-only, PRAGMA query_only)
   models_owner.py    WeatherHistory, HistoricalHarvest, HistoricalAnnualYield,
                      YieldEstimate + YieldEstimateBlock + YieldEstimatePack
-                     (the Estimate tab's versions, block lines and pack-out mix)
+                     (the Estimate tab's versions, block lines and pack-out mix),
+                     ForecastSnapshot (daily Expected kg for the Risk trend)
   models_boord.py    read-only field-subset mirrors of Boord's Block/Worker/Supplier/…
   weather.py         Open-Meteo fetch/parse + WeatherHistory sync (session-split)
   timeutil.py        day_bounds / to_local, copied from Boord
@@ -226,6 +227,7 @@ the old mapping.
 | --- | --- | --- |
 | `BOORD_DB_PATH` | yes on the farm server | absolute path to Boord's `data/boord.db` (dev defaults to `../Boord/data/boord.db`) |
 | `OWNER_PORT` | no | default 8010 |
+| `FORECAST_SNAPSHOT_HOURS` | no | how often the background job records the forecast's Expected kg (default 6; 0 = off) |
 | `OWNER_DATA_DIR` | no | default `<repo>/data` |
 | `IWEATHAR_STATION_ID` | no | this farm's on-site iWeathar station id (e.g. `2235` for iWeathar Station Bekfontein), if it has one - unset means Open-Meteo only, the old behaviour |
 | `OWNER_AI_PROVIDER` | no | `gemini` (default), `groq` or `custom` - see **Ask about this estimate** |
@@ -361,8 +363,14 @@ migrates it on every startup. This app opens it read-only
 **This app owns `data/owner.db`** — `WeatherHistory`, `HistoricalHarvest`,
 `HistoricalAnnualYield`, all three copied verbatim from Boord (git
 `2226750`) so the import scripts stay valid, and the Estimate tab's own
-`YieldEstimate`, `YieldEstimateBlock` and `YieldEstimatePack`. Schema init
-is `create_all` on an explicit six-table list (`db._OWNER_TABLES`) plus an
+`YieldEstimate`, `YieldEstimateBlock` and `YieldEstimatePack`, and
+`ForecastSnapshot` — one row per day holding that day's Expected kg from the
+Risk tab's Harvest Forecast, which feeds the Expected card's last-7-days
+trend. A background thread (`FORECAST_SNAPSHOT_HOURS`, default 6, 0 = off)
+rebuilds the forecast so days nobody opens the app still get a point; days
+the live weather forecast was unavailable are skipped. The trend starts
+empty and fills over the first week. Schema init
+is `create_all` on an explicit seven-table list (`db._OWNER_TABLES`) plus an
 additive column top-up
 (`db._ensure_owner_columns`) — no
 Alembic; the schema is small and single-writer. Import the pre-Boord

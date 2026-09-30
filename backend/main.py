@@ -11,6 +11,7 @@ tailnet `tailscale serve` publishes it to. Read README.md's Access section
 before changing how this is served.
 """
 import os
+import threading
 import time
 
 from fastapi import FastAPI
@@ -106,6 +107,27 @@ def on_startup():
     with boord_engine.connect() as conn:
         _assert_boord_schema(conn)
     init_owner_db()
+    _start_forecast_snapshots()
+
+
+def _forecast_snapshot_loop() -> None:
+    """Records the Harvest Forecast's Expected kg every
+    config.FORECAST_SNAPSHOT_HOURS, for the Risk tab's last-7-days trend.
+    A failed run (Open-Meteo down, Boord mid-migration) is logged and
+    retried next cycle; it never stops the loop or the app."""
+    time.sleep(60)   # let startup finish and the first requests through
+    while True:
+        try:
+            risk.snapshot_expected_forecast()
+        except Exception as e:  # noqa: BLE001 - see docstring
+            print(f"[forecast-snapshot] skipped: {e}", flush=True)
+        time.sleep(config.FORECAST_SNAPSHOT_HOURS * 3600)
+
+
+def _start_forecast_snapshots() -> None:
+    if config.FORECAST_SNAPSHOT_HOURS > 0:
+        threading.Thread(target=_forecast_snapshot_loop, name="forecast-snapshots",
+                         daemon=True).start()
 
 
 class NoCacheStaticFiles(StaticFiles):

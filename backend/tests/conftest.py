@@ -18,6 +18,7 @@ os.environ["OWNER_DATA_DIR"] = _TMP
 os.environ["OWNER_DB_PATH"] = os.path.join(_TMP, "owner.db")
 os.environ["BOORD_DB_PATH"] = os.path.join(_TMP, "boord.db")
 os.environ["BOORD_STARTUP_WAIT_SECONDS"] = "0"
+os.environ["FORECAST_SNAPSHOT_HOURS"] = "0"
 
 from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
 

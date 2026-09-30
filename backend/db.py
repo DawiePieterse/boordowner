@@ -4,7 +4,7 @@ Two engines, on purpose:
 
   owner_engine - data/owner.db, READ-WRITE. This process is its only writer.
                  Holds WeatherHistory, HistoricalHarvest,
-                 HistoricalAnnualYield, and the owner's own crop
+                 HistoricalAnnualYield, ForecastSnapshot, and the owner's own crop
                  estimates (YieldEstimate, YieldEstimateBlock,
                  YieldEstimatePack).
 
@@ -29,7 +29,7 @@ import config
 # it registers every Boord mirror table on the shared SQLModel.metadata,
 # which is exactly why init_owner_db() has to pass an explicit table list.
 from models_boord import Block, Supplier
-from models_owner import (HistoricalAnnualYield, HistoricalHarvest,
+from models_owner import (ForecastSnapshot, HistoricalAnnualYield, HistoricalHarvest,
                           WeatherHistory, YieldEstimate, YieldEstimateBlock,
                           YieldEstimatePack)
 
@@ -115,6 +115,7 @@ _OWNER_TABLES = [
     YieldEstimate.__table__,
     YieldEstimateBlock.__table__,
     YieldEstimatePack.__table__,
+    ForecastSnapshot.__table__,
 ]
 
 # Serialises the append in weather.sync_recent_weather(): two tab-opens can

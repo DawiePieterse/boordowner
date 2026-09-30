@@ -50,3 +50,23 @@ IWEATHAR_STATION_ID = os.environ.get("IWEATHAR_STATION_ID") or None
 BOORD_STARTUP_WAIT_SECONDS = int(os.environ.get("BOORD_STARTUP_WAIT_SECONDS", "300"))
 
 FRONTEND_DIR = os.path.join(REPO_ROOT, "frontend")
+
+# Ask about this estimate: an AI model that explains the Estimate tab's
+# figures in words (see ai.py, routers/ai.py). Off unless a key is set - the
+# app works exactly as before without it.
+#
+# The key lives here on the server, never in a browser: every phone and
+# laptop on the tailnet gets the feature without anyone typing a key in, and
+# nobody can read it out of a page. What is sent is a summary of the farm's
+# figures (block kg, the owner's estimate and notes, pack-out mix) - to
+# Google or Groq, or to whatever OWNER_AI_ENDPOINT points at.
+#
+#   OWNER_AI_PROVIDER  gemini (default) | groq | custom
+#   OWNER_AI_API_KEY   the provider's key; custom endpoints may need none
+#   OWNER_AI_ENDPOINT  custom only: an OpenAI-compatible chat/completions URL
+#   OWNER_AI_MODEL     blank = the provider's default, replaced automatically
+#                      when the provider retires it
+AI_PROVIDER = (os.environ.get("OWNER_AI_PROVIDER") or "gemini").strip().lower()
+AI_API_KEY = (os.environ.get("OWNER_AI_API_KEY") or "").strip()
+AI_ENDPOINT = (os.environ.get("OWNER_AI_ENDPOINT") or "").strip()
+AI_MODEL = (os.environ.get("OWNER_AI_MODEL") or "").strip()

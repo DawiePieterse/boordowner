@@ -9,7 +9,10 @@
 //   * the weather model cross-check - the Risk tab's Harvest Forecast next
 //     to the estimate, reusing the Risk tab's saved figures where fresh;
 //   * similar past seasons - /api/estimate/analogs, loaded separately
-//     because it reads decades of weather.
+//     because it reads decades of weather;
+//   * Ask about this estimate (ai-panel.js) - questions in words, answered
+//     by the AI model set up on the farm server from these same figures,
+//     unsaved edits included.
 const LWEstimateTab = (() => {
   let _data = null;       // the last /api/estimate payload
   let _lines = [];        // working copy of the shown estimate's block lines
@@ -29,6 +32,7 @@ const LWEstimateTab = (() => {
   let _analogSeason = null;
   let _analogSeq = 0;
   let _analogFailed = false;
+  let _ask = null;        // the LWAsk panel
 
   const RISK_CACHE_KEY = "boord_cached_risk";   // the Risk tab's own saved copy
   const $ = (id) => document.getElementById(id);
@@ -129,6 +133,15 @@ const LWEstimateTab = (() => {
       renderPack();
       const inputs = $("estPackRows").querySelectorAll('input[data-field="channel"]');
       if (inputs.length) inputs[inputs.length - 1].focus();
+    });
+
+    _ask = LWAsk.create({
+      el: $("estAsk"),
+      title: "Ask about this estimate",
+      placeholder: "e.g. Which blocks look high against their history?",
+      context: aiContext,
+      questions: aiQuestions,
+      actions: [{ label: "Add to notes", icon: "fa-note-sticky", show: () => !!(_data && _data.estimate), run: addToNotes }],
     });
 
     window.addEventListener("beforeunload", (e) => {
@@ -489,6 +502,7 @@ const LWEstimateTab = (() => {
       else _risk = { error: Boord.isNetworkError(e) ? "offline" : "failed" };
     }
     renderCrosscheck();
+    if (_ask) _ask.refresh();
   }
 
   function renderCrosscheck() {
@@ -645,6 +659,7 @@ const LWEstimateTab = (() => {
   }
 
   function renderAnalogOption() {
+    if (_ask) _ask.refresh();   // the chips follow what has loaded
     const opt = $("estFillBasis").querySelector('option[value="analog"]');
     if (!opt) return;
     const a = _analogs;
@@ -875,6 +890,64 @@ const LWEstimateTab = (() => {
       console.error("Estimate export failed:", e);
       Boord.toast("Could not build the workbook");
     }
+  }
+
+  // ------------------------------------------------------------------- ask
+  // What Ask sends besides the question: the version on screen and, when
+  // it has unsaved edits, the working copy itself - so "review this before
+  // I save" reviews what is typed, not what was last saved. Pack-out lines
+  // the server would refuse (half-typed) are left out, as packout() does.
+  function aiContext() {
+    if (!_data) return null;
+    const body = { tab: "estimate", season: _data.season_year };
+    if (_data.estimate) {
+      body.estimate_id = _data.estimate.id;
+      if (_dirty) {
+        body.draft = {
+          name: $("estName").value.trim().slice(0, 100),
+          notes: $("estNotes").value.slice(0, 4000),
+          lines: _lines.map(({ block_id, trees, kg_per_tree, note }) => ({ block_id, trees, kg_per_tree, note: note || "" })),
+          pack: _pack.filter((p) => (p.channel || "").trim() && Number.isFinite(p.share_pct) && p.share_pct >= 0 && p.share_pct <= 100)
+            .map(({ channel, pack_type, kg_per_carton, share_pct, note }) => ({
+              channel: channel.trim(), pack_type: (pack_type || "").trim(),
+              kg_per_carton: kg_per_carton > 0 && kg_per_carton <= 50 ? kg_per_carton : null,
+              share_pct, note: (note || "").trim() })),
+        };
+      }
+    }
+    const fc = forecastSnapshot();
+    if (fc) body.forecast = fc;
+    return { body, key: `${body.season}:${body.estimate_id || ""}` };
+  }
+
+  // Suggested questions for what is on screen: a review first, then
+  // whichever comparisons have something behind them.
+  function aiQuestions() {
+    const d = _data;
+    if (!d) return [];
+    const analogsOk = _analogs && _analogs.state === "ok" && _analogs.season_year === d.season_year;
+    const modelOk = d.season_year === d.current_year ? !!(_risk && forecastFigures(_risk.forecast))
+      : !!(d.estimate && d.estimate.forecast_snapshot);
+    if (!d.estimate) {
+      return ["What does each block's history suggest for this season?",
+              ...(analogsOk ? ["What do the similar seasons suggest?"] : []),
+              "How has the farm total moved over the years?"];
+    }
+    const qs = ["Review this estimate", "Which blocks look out of line with their history?"];
+    if (d.progress && d.progress.actual_kg) qs.push("Are we on track?");
+    if (modelOk) qs.push("How does it compare with the weather model?");
+    if (analogsOk) qs.push("What do the similar seasons suggest?");
+    if (d.estimates.length > 1) qs.push("How did the estimate move between versions?");
+    qs.push("Summarise this estimate for my notes");
+    return qs;
+  }
+
+  function addToNotes(text) {
+    const notes = $("estNotes");
+    const joined = notes.value.trim() ? `${notes.value.trimEnd()}\n\n${text}` : text;
+    notes.value = joined.slice(0, 4000);
+    setDirty(true);
+    Boord.toast(joined.length > 4000 ? "Added, cut to fit the notes - save to keep it" : "Added to the notes - save to keep it");
   }
 
   return { bind, load };

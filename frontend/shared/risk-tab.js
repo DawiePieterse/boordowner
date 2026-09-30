@@ -230,14 +230,16 @@ const LWRiskTab = (() => {
       const color = BAND_COLORS[s.band] || "#64748b";
       const avgLabel = forecast.regression_label ? `${forecast.regression_label} avg` : "historical avg";
       const pctText = s.vs_avg_pct == null ? "" : `${s.vs_avg_pct > 0 ? "+" : ""}${s.vs_avg_pct}% vs ${avgLabel}`;
-      // Actual recent pace (last 7 days' real harvested kg), shown only
-      // under Expected - the three cards share one season-long weather
-      // projection, so one sparkline of what's actually being picked right
-      // now is enough context for all three, not a fourth number to repeat.
-      const sparklineBlock = key === "expected" && forecast.last_7_days_kg && forecast.last_7_days_kg.length
+      // The Expected kg as forecast on each of the last 7 days, shown only
+      // under Expected. It fills in day by day from the server's daily
+      // snapshots, so until there are two points it says so instead.
+      const history = forecast.expected_kg_history || [];
+      const sparklineBlock = key === "expected"
         ? `<div class="mt-2 pt-2 border-t border-slate-100">
-            <div class="text-[10px] text-slate-400 uppercase tracking-wide">Last 7 days (actual)</div>
-            <div id="expectedKgSparkline" class="mt-1"></div>
+            <div class="text-[10px] text-slate-400 uppercase tracking-wide">Expected kg, last 7 days</div>
+            ${history.length >= 2
+              ? `<div id="expectedKgSparkline" class="mt-1"></div>`
+              : `<div class="text-[11px] text-slate-400 mt-1">Trend builds up as each day's forecast is recorded.</div>`}
           </div>`
         : "";
       return `
@@ -294,7 +296,7 @@ const LWRiskTab = (() => {
 
     const sparkEl = document.getElementById("expectedKgSparkline");
     if (sparkEl) {
-      const points = forecast.last_7_days_kg.map((day) => ({
+      const points = forecast.expected_kg_history.map((day) => ({
         x: day.date, y: day.kg,
         label: `${new Date(`${day.date}T00:00:00`).toLocaleDateString(undefined,
           { weekday: "short", month: "short", day: "numeric" })}: ${day.kg.toLocaleString()} kg`,

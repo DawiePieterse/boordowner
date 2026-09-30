@@ -515,7 +515,7 @@ const LWCharts = (() => {
 
   // A compact inline sparkline - no axes, no legend, just the shape of a
   // short recent series (e.g. the Harvest Forecast card's last-7-days
-  // actual kg) sitting next to a headline number. points: [{x, y, label}]
+  // expected kg) sitting next to a headline number. points: [{x, y, label}]
   // in x order; label is what a hover shows (defaults to "x: y").
   function sparkline(container, points, { color = PALETTE[0], height = 36 } = {}) {
     if (!points || !points.length) return emptyState(container, "No data");

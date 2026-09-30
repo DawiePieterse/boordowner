@@ -157,3 +157,18 @@ class YieldEstimatePack(SQLModel, table=True):
     kg_per_carton: Optional[float] = None  # NULL = not cartoned (juice, rejects)
     share_pct: float = 0.0                 # % of the estimate's net picked kg
     note: str = ""
+
+
+class ForecastSnapshot(SQLModel, table=True):
+    """One row per day: the Expected kg the Harvest Forecast gave that day.
+    Written by risk.record_forecast_snapshot() (a background job and any
+    forecast build), read back for the Expected card's last-7-days trend.
+    Kept because a past forecast cannot be rebuilt later - the live weather
+    forecast it used is never stored. A day is overwritten by the day's
+    later builds, so the row holds the day's latest figure. Days the live
+    forecast was unavailable are skipped, not stored as a lesser number."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    snapshot_date: date = Field(index=True, unique=True)   # the farm's local date
+    season_year: int
+    expected_kg: float
+    built_at: datetime   # naive UTC

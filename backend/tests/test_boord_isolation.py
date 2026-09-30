@@ -208,7 +208,8 @@ def test_assert_boord_schema_accepts_empty_tables(tmp_path):
 def test_owner_db_holds_only_owner_tables(client):
     assert set(inspect(owner_engine).get_table_names()) == {
         "weatherhistory", "historicalharvest", "historicalannualyield",
-        "yieldestimate", "yieldestimateblock", "yieldestimatepack"}
+        "yieldestimate", "yieldestimateblock", "yieldestimatepack",
+        "forecastsnapshot"}
 
 
 def test_init_owner_db_is_idempotent(client):

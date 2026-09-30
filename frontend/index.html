@@ -18,6 +18,7 @@
 <script src="./shared/analysis-tab.js"></script>
 <script src="./shared/weather-tab.js"></script>
 <script src="./shared/risk-tab.js"></script>
+<script src="./shared/ai-panel.js"></script>
 <script src="./shared/estimate-tab.js"></script>
 <script src="./shared/ptr.js"></script>
 <!-- html2canvas + jsPDF are loaded on the first "download as PDF" tap (charts.js), not here. -->
@@ -124,6 +125,8 @@
       <div id="estKpiGrid" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
 
       <div id="estProgress" class="bg-white rounded-xl shadow p-4 text-sm space-y-1 hidden"></div>
+
+      <div id="estAsk" class="bg-white rounded-xl shadow p-4 text-sm space-y-2"></div>
 
       <div id="estEmpty" class="bg-white rounded-xl shadow p-4 text-sm space-y-3 hidden">
         <p>No estimate yet for the <span id="estEmptySeason"></span> season.</p>

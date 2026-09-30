@@ -178,6 +178,28 @@ try {
     Write-Step "On-farm weather station (optional)..."
     $iweathar = Read-Host "iWeathar station id, if this farm has one (blank to skip)"
 
+    # --- Step 3c: Ask about this estimate (optional) ---
+    # A free AI key turns on the Estimate tab's question box (backend/ai.py,
+    # README "Ask about this estimate"). Blank keeps the key the current
+    # launcher already has, or leaves Ask off. The key is written into the
+    # launcher in plain text - it is gitignored and never sent to a browser.
+    Write-Step "Ask about this estimate - AI key (optional)..."
+    $aiLines = ""
+    if (Test-Path $LauncherPath) {
+        $aiLines = (Get-Content $LauncherPath | Where-Object { $_ -match '^set "OWNER_AI_' }) -join "`r`n"
+    }
+    $aiBlank = if ($aiLines) { "blank to keep the current one" } else { "blank to skip" }
+    $aiKey = Read-Host "Gemini key from aistudio.google.com/apikey, or a Groq key ($aiBlank)"
+    if ($aiKey) {
+        $aiProvider = (Read-Host "Provider: gemini or groq (blank for gemini)").Trim().ToLower()
+        if (-not $aiProvider) { $aiProvider = "gemini" }
+        if ($aiProvider -notin @("gemini", "groq")) {
+            Write-Warn "Unknown provider '$aiProvider' - using gemini. For another endpoint see README."
+            $aiProvider = "gemini"
+        }
+        $aiLines = "set ""OWNER_AI_PROVIDER=$aiProvider""`r`nset ""OWNER_AI_API_KEY=$aiKey"""
+    }
+
     # --- Step 4: Virtual environment ---
     Write-Step "Setting up the app's virtual environment..."
     if (-not (Test-Path $VenvDir)) { & $pythonExe -m venv $VenvDir; Write-Ok "Created virtual environment" }
@@ -222,6 +244,7 @@ try {
 cd /d "$BackendDir"
 set "BOORD_DB_PATH=$boordDb"
 $iweatharLine
+$aiLines
 "$venvPython" -m uvicorn main:app --host 127.0.0.1 --port $Port
 "@
     Set-Content -Path $LauncherPath -Value $launcher -Encoding ASCII

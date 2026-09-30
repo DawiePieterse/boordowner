@@ -139,6 +139,34 @@ name and the chart's title.
 
 ---
 
+## Estimate tab: Ask about this estimate
+
+Near the top of the Estimate tab is a question box. Tap a suggestion -
+**Review this estimate**, **Which blocks look out of line with their
+history?**, **Are we on track?**, **How does it compare with the weather
+model?** — or type your own, and an AI model answers in words from the
+figures on the tab: each block's estimate against its own history, the
+similar seasons, the weather model and the picking so far. Changes you
+haven't saved yet are included, so you can ask for a review before you
+save.
+
+Under an answer you can ask a follow-up (**Why?**, **Break that down by
+block**), copy it, or **Add to notes** — which puts it in this version's
+notes for you to edit and save. The AI never changes the estimate itself.
+
+Things to keep in mind:
+
+- It can be wrong. If it names a season or block that isn't on file, a note
+  under the answer says so — check anything that matters against the table.
+- Asking sends this estimate's figures (block kg, your notes, the pack-out
+  mix) from the farm server to the AI provider. Worker, supplier and lot
+  data are not sent.
+- If the card says it's not set up, the farm server needs a (free) AI key -
+  whoever looks after the server can add one (README, "Ask about this
+  estimate").
+
+---
+
 ## Weather tab
 
 The farm's own weather record, **1987 to today**, drawn from the weather

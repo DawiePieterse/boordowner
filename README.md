@@ -26,7 +26,8 @@ against the picking once the season is running. Around it: each version's
 pack-out mix turned into kg and cartons per channel (estimation only — no
 pallets, transport or markets), the Risk tab's weather-driven Harvest
 Forecast as a cross-check (snapshotted with each saved version), and the
-past seasons whose weather so far came closest. With no sign-in, anyone
+past seasons whose weather so far came closest, and — when an AI key is
+set on the server — **Ask about this estimate** (see below). With no sign-in, anyone
 who can reach the app can edit it — see **Access** below. Boord's setup
 and detail screens are not here — those live in Boord and were never part
 of this app.
@@ -36,7 +37,9 @@ of this app.
 ```
 backend/
   main.py            FastAPI app: startup checks, router registration, static mount
-  config.py          paths + env (OWNER_DB_PATH, BOORD_DB_PATH, OWNER_PORT)
+  config.py          paths + env (OWNER_DB_PATH, BOORD_DB_PATH, OWNER_PORT, OWNER_AI_*)
+  ai.py              the AI provider for Ask: Gemini / Groq / OpenAI-compatible,
+                     streamed, retired-model fallback (no database access)
   db.py              two engines: owner.db (read-write) + boord.db (read-only, PRAGMA query_only)
   models_owner.py    WeatherHistory, HistoricalHarvest, HistoricalAnnualYield,
                      YieldEstimate + YieldEstimateBlock + YieldEstimatePack
@@ -55,6 +58,8 @@ backend/
     estimate.py      /api/estimate (GET view, POST/PUT/DELETE versions, /{id}/export XLSX)
     analogs.py       /api/estimate/analogs (similar past seasons; reads owner.db
                      weather only, never fetches)
+    ai.py            /api/ai/{status,ask}: Ask about this estimate - builds the
+                     summary, releases Boord, streams the model's answer (NDJSON)
     historical.py    /api/historical-*/import
     historical_report.py   /api/reports/historical-harvest-data (the XLSX workbook)
   tests/             pytest: data endpoints, Boord isolation, ported risk-function tests
@@ -223,6 +228,40 @@ the old mapping.
 | `OWNER_PORT` | no | default 8010 |
 | `OWNER_DATA_DIR` | no | default `<repo>/data` |
 | `IWEATHAR_STATION_ID` | no | this farm's on-site iWeathar station id (e.g. `2235` for iWeathar Station Bekfontein), if it has one - unset means Open-Meteo only, the old behaviour |
+| `OWNER_AI_PROVIDER` | no | `gemini` (default), `groq` or `custom` - see **Ask about this estimate** |
+| `OWNER_AI_API_KEY` | no | the provider's API key; unset = Ask is off (the card says how to set it up) |
+| `OWNER_AI_ENDPOINT` | custom only | an OpenAI-compatible `.../chat/completions` URL |
+| `OWNER_AI_MODEL` | no | blank = the provider's default, swapped automatically when the provider retires it; a model set here is never swapped |
+
+### Ask about this estimate
+
+A question box on the Estimate tab: "Review this estimate", "Which blocks look
+out of line with their history?", "Are we on track?", or anything typed. The
+server summarises the tab's own figures (`routers/ai.py`: each block's
+estimate beside its history and the similar-seasons figure, the weather-model
+cross-check, progress, pack-out, versions, plus a few precomputed highlights),
+sends them with the question to an AI model and streams the answer back. The
+same design as the Weather Compare app's "Ask about this comparison", cloud
+only, with the key on the server instead of in each browser.
+
+- **Off until a key is set.** Get a free key (Gemini: aistudio.google.com/apikey;
+  Groq: console.groq.com/keys), re-run the installer and enter it at the Ask
+  step, or add `set "OWNER_AI_API_KEY=..."` (and `OWNER_AI_PROVIDER` for Groq) to
+  `start_owner_server.bat` and restart the task. The key sits in that launcher in
+  plain text, readable by the server's administrators - it is not committed.
+- **What leaves the farm.** Each question sends the summary to the provider:
+  block kg and kg/tree, the owner's estimate, notes and pack-out mix, farm
+  totals. Not worker, supplier or lot data, and never the key to a browser.
+  The card says so under the question box.
+- **It only reads.** Answers are never written into an estimate; the owner can
+  copy one or add it to the version's notes and save.
+- **Unsaved edits count.** The browser sends its working copy and the
+  weather-model figures it is showing, so a review covers what is on screen.
+- **Guard rails.** The prompt holds the model to the figures sent; an answer
+  that echoes JSON is asked again in words; one that names a season or block
+  not in the summary gets a "check this against the table" note.
+- Boord's database is read and closed before the provider is called
+  (`tests/test_ai.py` asserts it), like every other outbound call here.
 
 ## Updates
 

@@ -372,6 +372,12 @@ def build_estimate_summary(boord: Session, owner: Session, body: AskIn, today: d
                    "favorable_kg": snap["favorable_kg"], "expected_kg": snap["expected_kg"],
                    "unfavorable_kg": snap["unfavorable_kg"], "live_weather_forecast_used": snap["live"],
                    "factors_settled": snap["settled"]}
+    # The owner's judgement comes first: the weather model is not put in
+    # front of the model (or the owner, through an answer) until at least
+    # one block carries a figure. The tab keeps the model's card below the
+    # editor for the same reason.
+    if weather and not totals["blocks_estimated"]:
+        weather = None
     if weather:
         weather["factor_count"] = 4
         weather.update(_crosscheck(total, weather["favorable_kg"], weather["expected_kg"],

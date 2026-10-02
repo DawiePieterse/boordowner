@@ -59,6 +59,20 @@
         <button id="dashSeasonBtn" class="date-preset-btn px-3 py-2 bg-slate-200 rounded-lg text-sm">Season</button>
       </div>
 
+      <!-- The season brief: written once a day by the AI model from the
+           Estimate tab's figures (routers/ai.py build_brief). Hidden until
+           there is one or a provider is set up. -->
+      <div id="dashBrief" class="bg-white rounded-xl shadow p-4 text-sm space-y-2 hidden">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="font-semibold"><i class="fa-solid fa-wand-magic-sparkles text-slate-400"></i> Today's season brief</div>
+          <div class="flex items-center gap-2">
+            <span id="dashBriefMeta" class="text-xs text-slate-400"></span>
+            <button id="dashBriefRefresh" class="px-3 py-1 bg-white border border-slate-300 rounded-full text-xs">Refresh</button>
+          </div>
+        </div>
+        <p id="dashBriefText"></p>
+      </div>
+
       <div id="dashKpiGrid" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
 
       <div class="bg-white rounded-xl shadow">
@@ -120,6 +134,10 @@
         <button id="estNewBtn" class="px-3 py-2 bg-slate-200 rounded-lg text-sm" title="Copy this version to revise it">New version</button>
         <button id="estExportBtn" class="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm"><i class="fa-solid fa-file-excel text-green-700"></i> Excel</button>
         <button id="estDeleteBtn" class="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-red-700">Delete</button>
+        <div id="estCompareWrap" class="flex flex-wrap gap-2 items-end hidden">
+          <div><label class="text-xs text-slate-500 block">Compare with</label><select id="estCompareWith" class="border border-slate-300 rounded-lg p-2 text-sm"></select></div>
+          <button id="estCompareBtn" class="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm" title="What moved between the two versions, in words"><i class="fa-solid fa-wand-magic-sparkles text-slate-400"></i> What changed?</button>
+        </div>
       </div>
 
       <div id="estKpiGrid" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
@@ -127,6 +145,21 @@
       <div id="estProgress" class="bg-white rounded-xl shadow p-4 text-sm space-y-1 hidden"></div>
 
       <div id="estAsk" class="bg-white rounded-xl shadow p-4 text-sm space-y-2"></div>
+
+      <!-- Check this estimate (ai-panel's sibling): the structured review,
+           block by block. Hidden until a check has run; cleared when
+           another version or season is shown. -->
+      <div id="estReview" class="bg-white rounded-xl shadow p-4 text-sm space-y-2 hidden">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="font-semibold"><i class="fa-solid fa-list-check text-slate-400"></i> Check of this estimate</div>
+          <div id="estReviewMeta" class="text-xs text-slate-400"></div>
+        </div>
+        <p id="estReviewOverall"></p>
+        <ul id="estReviewFarm" class="review-list"></ul>
+        <div class="overflow-x-auto"><table class="w-full text-sm"><tbody id="estReviewRows"></tbody></table></div>
+        <div id="estReviewNote" class="text-xs text-amber-700"></div>
+        <p class="text-xs text-slate-400">Flags and ranges are the model's reading of each block's own history - a reason to look again in the orchard, never a figure to type in. Your estimate stays yours.</p>
+      </div>
 
       <div id="estEmpty" class="bg-white rounded-xl shadow p-4 text-sm space-y-3 hidden">
         <p>No estimate yet for the <span id="estEmptySeason"></span> season.</p>
@@ -186,6 +219,7 @@
 
         <div class="flex items-center gap-3">
           <button id="estSaveBtn" class="px-3 py-2 bg-slate-200 rounded-lg text-sm font-semibold">Save</button>
+          <button id="estCheckBtn" class="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm hidden" title="The AI model checks every block against its history before you save"><i class="fa-solid fa-list-check text-slate-400"></i> Check before I save</button>
           <span id="estDirty" class="text-xs text-red-700 hidden">Unsaved changes</span>
         </div>
       </div>

@@ -108,6 +108,7 @@ def on_startup():
         _assert_boord_schema(conn)
     init_owner_db()
     _start_forecast_snapshots()
+    _start_daily_brief()
 
 
 def _forecast_snapshot_loop() -> None:
@@ -128,6 +129,25 @@ def _start_forecast_snapshots() -> None:
     if config.FORECAST_SNAPSHOT_HOURS > 0:
         threading.Thread(target=_forecast_snapshot_loop, name="forecast-snapshots",
                          daemon=True).start()
+
+
+def _daily_brief_loop() -> None:
+    """Writes the Dashboard's season brief once a day (routers/ai.py
+    write_brief_if_due) - checked every config.BRIEF_HOURS, so a server
+    that was off overnight writes it on the next check rather than
+    waiting for tomorrow. Nothing to do when no AI provider is set up."""
+    time.sleep(120)   # after the forecast snapshot's first run, and the first requests
+    while True:
+        try:
+            ai.write_brief_if_due()
+        except Exception as e:  # noqa: BLE001 - logged and retried next cycle
+            print(f"[brief] skipped: {e}", flush=True)
+        time.sleep(config.BRIEF_HOURS * 3600)
+
+
+def _start_daily_brief() -> None:
+    if config.BRIEF_HOURS > 0:
+        threading.Thread(target=_daily_brief_loop, name="daily-brief", daemon=True).start()
 
 
 class NoCacheStaticFiles(StaticFiles):

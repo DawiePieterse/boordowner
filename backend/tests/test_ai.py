@@ -47,7 +47,7 @@ def test_off_without_a_key(monkeypatch, client):
     monkeypatch.setattr(config, "AI_API_KEY", "")
     monkeypatch.setattr(config, "AI_PROVIDER", "gemini")
     assert ai.settings() is None
-    assert client.get("/api/ai/status").json() == {"configured": False}
+    assert client.get("/api/ai/status").json() == {"configured": False, "notes": False}
     r = client.post("/api/ai/ask", json={"question": "Review this estimate"})
     assert r.status_code == 503
     # A custom endpoint needs its URL, not necessarily a key.

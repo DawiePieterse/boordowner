@@ -172,3 +172,20 @@ class ForecastSnapshot(SQLModel, table=True):
     season_year: int
     expected_kg: float
     built_at: datetime   # naive UTC
+
+
+class SeasonBrief(SQLModel, table=True):
+    """One row per day: the short season brief the AI model wrote for the
+    Dashboard (routers/ai.py build_brief) - picking pace against the
+    estimate, how the weather model has moved, which blocks to walk.
+    Written by the background job in main.py and by the Dashboard's
+    Refresh button; the day's later builds overwrite the day's row. Kept
+    so the Dashboard shows the last brief instantly, offline included,
+    and nobody pays for a second one the same day by reopening the app."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    brief_date: date = Field(index=True, unique=True)   # the farm's local date
+    season_year: int
+    text: str
+    provider: str = ""
+    model: str = ""
+    built_at: datetime   # naive UTC

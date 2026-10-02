@@ -161,9 +161,55 @@ Things to keep in mind:
 - Asking sends this estimate's figures (block kg, your notes, the pack-out
   mix) from the farm server to the AI provider. Worker, supplier and lot
   data are not sent.
-- If the card says it's not set up, the farm server needs a (free) AI key -
+- If the card says it's not set up, the farm server needs an AI key -
   whoever looks after the server can add one (README, "Ask about this
-  estimate").
+  estimate"). The line under the heading shows which model answers and how
+  many questions have been asked today against the day's limit.
+- When the model answers with Claude, it can look things up for itself: a
+  block's whole record, a season's weather, how a season's picking ran. The
+  panel says what it is looking up while you wait.
+
+### Check before I save
+
+Next to **Save** is **Check before I save**. The model goes through every
+block against its own history and comes back with a flag on each row -
+**High**, **Medium**, **Low** or **OK** - and a card underneath with the
+reason for each, the kg/tree range that block's history supports, and the
+whole-farm points (total against last season, the weather model, pack-out
+shares, pace). Hover or tap a flag for its reason; tap a line in the card to
+jump to the row. It checks what is on screen, unsaved changes included, and
+says when you have changed figures since. It never writes a figure: the range
+is something to judge your number against, not to type in.
+
+### What changed?
+
+Once a season has two or more versions, **Compare with** and **What
+changed?** appear next to the Version selector. Pick the other version and
+tap: the model says which blocks drove the change in the total, which barely
+moved, what each version's notes say about why, and whether the weather
+model moved with the estimate or against it. The answer lands in the
+question box's panel, and follow-ups carry on from it.
+
+### Ask the farm notes
+
+If Boord Notes is linked on the server, the panel has an **Ask the farm
+notes instead** toggle. With it on, the question goes to the notebook -
+"What has been noted about block 8a?" - and the answer comes from Andre's
+notes only, with the notes it used listed underneath. With Claude answering,
+you can also just ask ("what do the farm notes say about the blocks that
+look out of line?") and it consults the notes itself.
+
+---
+
+## Dashboard: Today's season brief
+
+Once an estimate for the season exists and the server has an AI key, the top
+of the Dashboard carries a short paragraph each morning: how the picking is
+running against the estimate's pace, how the weather model's Expected has
+moved over the last days, and a block or two worth walking today, with the
+figure that says so. It is written once a day on the server and shown from
+there, so it opens instantly and offline. **Refresh** writes today's again.
+It can be wrong like any answer here - the tabs have the figures.
 
 ---
 

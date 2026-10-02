@@ -1,37 +1,61 @@
-"""The AI model behind "Ask about this estimate": which provider, which
-model, and one streamed chat call. Ported from the Weather Compare app's
+"""The AI model behind Ask, Check, Compare and the daily brief: which
+provider, which model, and the calls themselves - one streamed answer,
+one JSON answer, one plain answer. Ported from the Weather Compare app's
 site/js/ai.js, cloud half only - with the key held here on the server (see
 config.AI_*) rather than typed into each browser.
 
-Three providers, all free-tier friendly:
+Four providers:
 
-  gemini - Google's own streaming API (x-goog-api-key header).
-  groq   - OpenAI-compatible chat/completions.
-  custom - any other OpenAI-compatible chat/completions URL (Cloudflare
-           Workers AI, a local Ollama/LM Studio, OpenRouter...).
+  anthropic - Claude through the official SDK. The one that gets the full
+              feature set: answers constrained to a JSON schema (the Check
+              findings, verified block by block), prompt caching (follow-up
+              questions re-read the figures at a tenth of the price), and
+              tool use (Ask can look a block's history or a season's
+              weather up for itself, and consult Boord Notes). Paid, a few
+              cents a question, which is why the daily cap exists.
+  gemini    - Google's own streaming API (x-goog-api-key header). Free tier.
+  groq      - OpenAI-compatible chat/completions. Free tier.
+  custom    - any other OpenAI-compatible chat/completions URL (Cloudflare
+              Workers AI, a local Ollama/LM Studio, OpenRouter...).
+
+The three free-tier providers get the same features where their APIs allow
+(JSON mode for Check; no tools, no caching), and the same guard rails.
 
 Free tiers retire model names every few months. When the model in use is
 refused as gone, the refusal's own "use X instead" is followed, else the
 provider's model list is asked and a replacement picked by preference - and
 remembered for the life of the process, so only the first question after a
 retirement pays for it. A model the owner set explicitly (OWNER_AI_MODEL) is
-never swapped behind their back.
+never swapped behind their back. Anthropic's model ids are stable, so that
+machinery is not wired to it.
+
+An answer cut off at the length limit, or one the provider declined, is
+reported in words after whatever text did arrive - never passed off as a
+whole answer (every provider says why it stopped; this module reads it).
 
 Like every other outbound call here, nothing in this module touches a
 database: routers/ai.py builds the figures, releases Boord's database, and
-only then calls stream().
+only then calls in. The one exception is a tool the model asks to run
+(see stream_events): the router's run_tool opens and closes its own
+sessions inside the call, so no session is ever held across the provider.
 """
 import json as _json
+import os
 import re as _re
 import threading
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Iterator, Optional
+from datetime import date
+from typing import Callable, Iterator, Optional
 
 import config
 
 PROVIDERS = {
+    "anthropic": {
+        "name": "Anthropic Claude", "model": "claude-sonnet-5-5",
+        "prefer": [], "avoid": r"$^",   # ids are stable: never swapped
+    },
     "gemini": {
         "name": "Google Gemini", "model": "gemini-3.8-flash",
         "models": "https://generativelanguage.googleapis.com/v1beta/models",
@@ -54,8 +78,15 @@ PROVIDERS = {
 }
 
 TEMPERATURE = 0.2
-MAX_OUTPUT_TOKENS = 1200   # a per-block review runs longer than a weather comparison
+MAX_OUTPUT_TOKENS = 2500   # a per-block review runs long; the model is told when it is cut short
 TIMEOUT_S = 60             # per socket read: a slow first token, not the whole answer
+
+# Anthropic: the SDK's own timeout and retries. No retries on a streamed
+# answer - the browser gives up on a slow first line (ai-panel.js
+# FIRST_BYTE_MS) and a retry after that is money spent on nobody.
+ANTHROPIC_TIMEOUT_S = 85.0
+ANTHROPIC_MAX_TOKENS = 4000
+MAX_TOOL_ROUNDS = 6        # lookups the model may chain in one answer
 
 _resolved: dict = {}       # provider -> replacement model, see the module docstring
 _resolved_lock = threading.Lock()
@@ -65,6 +96,19 @@ class AIError(Exception):
     """A provider refused or failed. The message is written for the owner."""
 
 
+# --------------------------------------------------------------------------- #
+# Settings
+# --------------------------------------------------------------------------- #
+def _anthropic_key() -> str:
+    """OWNER_AI_API_KEY, else ANTHROPIC_API_KEY, else the key file - so the
+    key Boord Notes already has on this server can serve this app too."""
+    key = config.AI_API_KEY or os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not key and config.AI_KEY_FILE and os.path.exists(config.AI_KEY_FILE):
+        with open(config.AI_KEY_FILE, encoding="utf-8") as f:
+            key = f.read().strip()
+    return key
+
+
 def settings() -> Optional[dict]:
     """The configured provider, or None when the feature is off: no key
     (and, for custom, no endpoint). Read from config on every call so a
@@ -72,6 +116,8 @@ def settings() -> Optional[dict]:
     provider = config.AI_PROVIDER if config.AI_PROVIDER in PROVIDERS else "custom"
     s = {"provider": provider, "api_key": config.AI_API_KEY,
          "endpoint": config.AI_ENDPOINT, "model": config.AI_MODEL}
+    if provider == "anthropic":
+        s["api_key"] = _anthropic_key()
     if provider == "custom":
         return s if s["endpoint"] else None
     return s if s["api_key"] else None
@@ -84,6 +130,11 @@ def provider_name(s: dict) -> str:
 def model_for(s: dict) -> str:
     """The owner's choice, else a remembered replacement, else the default."""
     return s["model"] or _resolved.get(s["provider"]) or PROVIDERS[s["provider"]]["model"]
+
+
+def has_tools(s: Optional[dict]) -> bool:
+    """Whether Ask can look things up for itself (tool use) - Claude only."""
+    return bool(s) and s["provider"] == "anthropic"
 
 
 def remember_model(provider: str, model: Optional[str]) -> None:
@@ -116,42 +167,103 @@ def model_gone(message: str) -> bool:
                            r"decommissioned|not supported", message or "", _re.I))
 
 
+# --------------------------------------------------------------------------- #
+# The daily cap
+# --------------------------------------------------------------------------- #
+# The tailnet is the only access control (no sign-in), so a stray device or
+# a runaway script could otherwise spend without limit - on the paid
+# provider in money, on the free ones in the day's quota. In memory on
+# purpose: a restart resets it, a fine failure mode for a cost guard. Same
+# design as Boord Notes.
+_usage_lock = threading.Lock()
+_usage = {"day": None, "count": 0}
+
+
+def spend_call() -> None:
+    today = date.today()
+    with _usage_lock:
+        if _usage["day"] != today:
+            _usage["day"], _usage["count"] = today, 0
+        if _usage["count"] >= config.AI_DAILY_LIMIT:
+            raise AIError("The daily limit for AI help has been reached. It resets tomorrow.")
+        _usage["count"] += 1
+
+
+def calls_today() -> int:
+    with _usage_lock:
+        return _usage["count"] if _usage["day"] == date.today() else 0
+
+
+# --------------------------------------------------------------------------- #
+# Gemini / OpenAI-compatible plumbing
+# --------------------------------------------------------------------------- #
 def _auth_headers(s: dict) -> dict:
     if s["provider"] == "gemini":
         return {"x-goog-api-key": s["api_key"]}
     return {"Authorization": f"Bearer {s['api_key']}"} if s["api_key"] else {}
 
 
-def build_request(messages: list, s: dict) -> tuple:
-    """(url, headers, body, delta) for one streamed chat call. `delta` pulls
-    the new text out of one parsed stream event."""
+def build_request(messages: list, s: dict, json_mode: bool = False) -> tuple:
+    """(url, headers, body, delta) for one chat call - streamed, or with
+    `json_mode` a single JSON reply (the provider's JSON mode where it has
+    one; the schema itself travels in the prompt). `delta` pulls the new
+    text out of one parsed stream event, or the whole text out of a
+    non-streamed reply."""
     headers = {"Content-Type": "application/json", **_auth_headers(s)}
     model = model_for(s)
     if s["provider"] == "gemini":
         system = "\n".join(m["content"] for m in messages if m["role"] == "system")
+        gen = {"temperature": TEMPERATURE, "maxOutputTokens": MAX_OUTPUT_TOKENS}
+        if json_mode:
+            gen["responseMimeType"] = "application/json"
         body = {
             "systemInstruction": {"parts": [{"text": system}]},
             "contents": [{"role": "model" if m["role"] == "assistant" else "user",
                           "parts": [{"text": m["content"]}]}
                          for m in messages if m["role"] != "system"],
-            "generationConfig": {"temperature": TEMPERATURE, "maxOutputTokens": MAX_OUTPUT_TOKENS},
+            "generationConfig": gen,
         }
+        method = "generateContent" if json_mode else "streamGenerateContent?alt=sse"
         url = ("https://generativelanguage.googleapis.com/v1beta/models/"
-               f"{urllib.parse.quote(model, safe='')}:streamGenerateContent?alt=sse")
+               f"{urllib.parse.quote(model, safe='')}:{method}")
 
         def delta(j):
             parts = ((j.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
             return "".join(p.get("text", "") for p in parts)
         return url, headers, body, delta
 
-    body = {"model": model, "messages": messages, "stream": True,
+    body = {"model": model, "messages": messages, "stream": not json_mode,
             "temperature": TEMPERATURE, "max_tokens": MAX_OUTPUT_TOKENS}
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
     url = s["endpoint"] if s["provider"] == "custom" else PROVIDERS[s["provider"]]["endpoint"]
 
     def delta(j):
         choice = (j.get("choices") or [{}])[0]
+        if json_mode:
+            return (choice.get("message") or {}).get("content") or ""
         return (choice.get("delta") or {}).get("content") or ""
     return url, headers, body, delta
+
+
+def finish_reason(s: dict, j: dict) -> Optional[str]:
+    """Why the model stopped, from one parsed event or reply, or None when
+    the event does not say (most streamed chunks don't)."""
+    if s["provider"] == "gemini":
+        return (j.get("candidates") or [{}])[0].get("finishReason")
+    return (j.get("choices") or [{}])[0].get("finish_reason")
+
+
+# What a provider calls "ran out of room" and "won't answer this".
+_CUT_SHORT = {"MAX_TOKENS", "length"}
+_DECLINED = {"SAFETY", "RECITATION", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "content_filter"}
+
+
+def _check_finish(reason: Optional[str], name: str) -> None:
+    if reason in _CUT_SHORT:
+        raise AIError(f"{name}: the answer was cut short at its length limit - ask something narrower")
+    if reason in _DECLINED:
+        raise AIError(f"{name} declined to answer this one")
 
 
 def _error_detail(raw: bytes) -> str:
@@ -229,12 +341,34 @@ def _sse(lines: Iterator[bytes]) -> Iterator[dict]:
             continue   # keep-alive or a partial line
 
 
+def _switch_model(s: dict, err: AIError) -> bool:
+    """A free-tier model retired under us: pick its replacement, remember
+    it, and say whether there is one to retry with."""
+    if s["model"] or s["provider"] == "anthropic" or not model_gone(str(err)):
+        return False
+    remember_model(s["provider"], None)
+    nxt = suggested_model(str(err)) or pick_model(
+        list_models(s), PROVIDERS[s["provider"]]["prefer"], PROVIDERS[s["provider"]]["avoid"])
+    if not nxt or nxt == model_for(s):
+        return False
+    print(f"[ai] {provider_name(s)}: switching model to {nxt}", flush=True)
+    remember_model(s["provider"], nxt)
+    return True
+
+
 def stream(messages: list, s: Optional[dict] = None, _retried: bool = False) -> Iterator[str]:
     """Asks the configured model and yields the answer's text as it arrives.
-    Raises AIError with an owner-readable message on any failure."""
+    Raises AIError with an owner-readable message on any failure - after
+    the text, when the answer was cut short or the provider stopped it
+    part-way, so the browser can show what arrived with a note."""
     s = s or settings()
     if not s:
         raise AIError("No AI provider is set up on the farm server")
+    if s["provider"] == "anthropic":
+        for ev in _anthropic_events(messages, s, tools=None, run_tool=None, effort="low"):
+            if "t" in ev:
+                yield ev["t"]
+        return
     name = provider_name(s)
     url, headers, body, delta = build_request(messages, s)
     try:
@@ -242,15 +376,9 @@ def stream(messages: list, s: Optional[dict] = None, _retried: bool = False) -> 
         first = next(lines, None)   # a refusal surfaces here, before any text
     except urllib.error.HTTPError as e:
         err = _failure(e.code, e.read() if e.fp else b"", name)
-        if not _retried and not s["model"] and model_gone(str(err)):
-            remember_model(s["provider"], None)
-            nxt = suggested_model(str(err)) or pick_model(
-                list_models(s), PROVIDERS[s["provider"]]["prefer"], PROVIDERS[s["provider"]]["avoid"])
-            if nxt and nxt != model_for(s):
-                print(f"[ai] {name}: switching model to {nxt}", flush=True)
-                remember_model(s["provider"], nxt)
-                yield from stream(messages, s, _retried=True)
-                return
+        if not _retried and _switch_model(s, err):
+            yield from stream(messages, s, _retried=True)
+            return
         raise err from None
     except (OSError, ValueError) as e:
         raise AIError(f"{name} could not be reached ({e})") from None
@@ -259,10 +387,233 @@ def stream(messages: list, s: Optional[dict] = None, _retried: bool = False) -> 
         if first is not None:
             yield first
         yield from lines
+    reason = None
     try:
         for event in _sse(all_lines()):
             text = delta(event)
             if text:
                 yield text
+            reason = finish_reason(s, event) or reason
     except (OSError, ValueError) as e:
         raise AIError(f"{name}: the answer was cut off ({e})") from None
+    _check_finish(reason, name)
+
+
+def _strip_fences(text: str) -> str:
+    """A small model in JSON mode still sometimes wraps the object in a
+    ```json fence, or leads with a sentence. Keep the outermost {...}."""
+    m = _re.search(r"\{.*\}", text, _re.S)
+    return m.group(0) if m else text
+
+
+def _complete_json_http(messages: list, s: dict, _retried: bool = False) -> dict:
+    name = provider_name(s)
+    url, headers, body, delta = build_request(messages, s, json_mode=True)
+    try:
+        raw = b"".join(_post_stream(url, headers, body))
+    except urllib.error.HTTPError as e:
+        err = _failure(e.code, e.read() if e.fp else b"", name)
+        if not _retried and _switch_model(s, err):
+            return _complete_json_http(messages, s, _retried=True)
+        raise err from None
+    except (OSError, ValueError) as e:
+        raise AIError(f"{name} could not be reached ({e})") from None
+    try:
+        j = _json.loads(raw)
+    except ValueError:
+        raise AIError(f"{name}: the reply could not be read") from None
+    _check_finish(finish_reason(s, j), name)
+    try:
+        return _json.loads(_strip_fences(delta(j)))
+    except ValueError:
+        raise AIError(f"{name}: the reply was not the JSON the app asked for - try again") from None
+
+
+# --------------------------------------------------------------------------- #
+# Anthropic
+# --------------------------------------------------------------------------- #
+_anthropic = {"key": None, "client": None}
+
+
+def _anthropic_client(s: dict):
+    """One SDK client per key. Split out so tests can stand in for it."""
+    if _anthropic["client"] is None or _anthropic["key"] != s["api_key"]:
+        import anthropic
+        _anthropic["key"] = s["api_key"]
+        _anthropic["client"] = anthropic.Anthropic(api_key=s["api_key"], timeout=ANTHROPIC_TIMEOUT_S,
+                                                   max_retries=0)
+    return _anthropic["client"]
+
+
+def _anthropic_messages(messages: list) -> tuple:
+    """Our (role, content) list -> the SDK's system blocks and messages.
+
+    Caching: the system prompt and the first user turn (the figures - the
+    bulk of every request) carry a cache breakpoint, so a follow-up within
+    five minutes re-reads them from cache. The figures must therefore be
+    byte-identical between a question and its follow-ups: routers/ai.py's
+    build_messages keeps them in the first turn, verbatim."""
+    system_text = "\n".join(m["content"] for m in messages if m["role"] == "system")
+    system = [{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}] if system_text else None
+    msgs = []
+    first_user = True
+    for m in messages:
+        if m["role"] == "system":
+            continue
+        content = m["content"]
+        if m["role"] == "user" and first_user and isinstance(content, str):
+            content = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
+            first_user = False
+        msgs.append({"role": m["role"], "content": content})
+    return system, msgs
+
+
+def _anthropic_errors():
+    """The SDK's typed errors, most specific first, each to a sentence for
+    the owner. Imported lazily: the SDK is only needed with this provider."""
+    import anthropic
+    return [
+        (anthropic.AuthenticationError, "Anthropic: the API key was rejected"),
+        (anthropic.RateLimitError, "Anthropic: busy right now, try again in a minute"),
+        (anthropic.APIConnectionError, "Anthropic could not be reached - check the server's internet connection"),
+        (anthropic.APIStatusError, None),   # message built from the status below
+    ]
+
+
+def _anthropic_fail(e: Exception) -> AIError:
+    for cls, msg in _anthropic_errors():
+        if isinstance(e, cls):
+            if msg is None:
+                print(f"[ai] Anthropic API error {getattr(e, 'status_code', '?')}: {e}", flush=True)
+                return AIError(f"Anthropic: the request failed (HTTP {getattr(e, 'status_code', '?')})")
+            return AIError(msg)
+    raise e
+
+
+def _log_usage(what: str, usage) -> None:
+    print(f"[ai] {what}: in={getattr(usage, 'input_tokens', 0)} "
+          f"cached={getattr(usage, 'cache_read_input_tokens', 0) or 0} "
+          f"out={getattr(usage, 'output_tokens', 0)}", flush=True)
+
+
+def _anthropic_events(messages: list, s: dict, tools: Optional[list], run_tool: Optional[Callable],
+                      effort: str) -> Iterator[dict]:
+    """The streamed answer as events: {"t": text} as it arrives, {"step":
+    sentence} each time the model looks something up. With `tools`, the
+    model may ask for a lookup; run_tool(name, input) answers it and the
+    model continues - up to MAX_TOOL_ROUNDS times in one answer."""
+    import anthropic
+    client = _anthropic_client(s)
+    system, msgs = _anthropic_messages(messages)
+    kwargs = dict(model=model_for(s), max_tokens=ANTHROPIC_MAX_TOKENS, messages=msgs,
+                  output_config={"effort": effort})
+    if system:
+        kwargs["system"] = system
+    if tools:
+        kwargs["tools"] = [{"name": t["name"], "description": t["description"],
+                            "input_schema": t["input_schema"]} for t in tools]
+    for _round in range(MAX_TOOL_ROUNDS + 1):
+        try:
+            with client.messages.stream(**kwargs) as st:
+                for text in st.text_stream:
+                    yield {"t": text}
+                final = st.get_final_message()
+        except anthropic.APIError as e:
+            raise _anthropic_fail(e) from None
+        _log_usage("ask", final.usage)
+        if final.stop_reason == "refusal":
+            raise AIError("Anthropic Claude declined to answer this one")
+        if final.stop_reason == "max_tokens":
+            raise AIError("Anthropic Claude: the answer was cut short at its length limit - ask something narrower")
+        if final.stop_reason != "tool_use" or not run_tool:
+            return
+        # The whole assistant turn goes back as-is (thinking blocks included,
+        # which the API requires unchanged), then every result in one message.
+        msgs.append({"role": "assistant", "content": final.content})
+        results = []
+        for block in final.content:
+            if block.type != "tool_use":
+                continue
+            step = next((t.get("step") for t in tools if t["name"] == block.name), None)
+            yield {"step": step(block.input) if callable(step) else (step or f"Looking up {block.name}...")}
+            try:
+                out = run_tool(block.name, dict(block.input))
+                results.append({"type": "tool_result", "tool_use_id": block.id,
+                                "content": _json.dumps(out, default=str)})
+            except Exception as e:  # noqa: BLE001 - the model is told, and carries on
+                print(f"[ai] tool {block.name} failed: {e}", flush=True)
+                results.append({"type": "tool_result", "tool_use_id": block.id,
+                                "content": f"Error: {e}", "is_error": True})
+        msgs.append({"role": "user", "content": results})
+    raise AIError("Anthropic Claude: too many lookups for one answer - ask something narrower")
+
+
+def _anthropic_json(messages: list, schema: dict, s: dict, effort: str) -> dict:
+    import anthropic
+    client = _anthropic_client(s)
+    system, msgs = _anthropic_messages(messages)
+    kwargs = dict(model=model_for(s), max_tokens=ANTHROPIC_MAX_TOKENS, messages=msgs,
+                  output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}})
+    if system:
+        kwargs["system"] = system
+    try:
+        # One retry here: nothing is streaming, and a review is worth a second go.
+        response = client.with_options(max_retries=1).messages.create(**kwargs)
+    except anthropic.APIError as e:
+        raise _anthropic_fail(e) from None
+    _log_usage("json", response.usage)
+    if response.stop_reason == "refusal":
+        raise AIError("Anthropic Claude declined to answer this one")
+    if response.stop_reason == "max_tokens":
+        raise AIError("Anthropic Claude: the answer was cut short at its length limit")
+    text = next((b.text for b in response.content if b.type == "text"), "")
+    try:
+        return _json.loads(text)
+    except ValueError:
+        raise AIError("Anthropic Claude: the reply could not be read - try again") from None
+
+
+# --------------------------------------------------------------------------- #
+# The three calls routers/ai.py makes
+# --------------------------------------------------------------------------- #
+def stream_events(messages: list, s: Optional[dict] = None, tools: Optional[list] = None,
+                  run_tool: Optional[Callable] = None, effort: str = "low") -> Iterator[dict]:
+    """The streamed answer as {"t": text} pieces, plus {"step": ...} when the
+    model looks something up (Claude only - the other providers answer from
+    the figures sent and never see `tools`). Counts one call against the
+    daily cap. Raises AIError, possibly after some text."""
+    s = s or settings()
+    if not s:
+        raise AIError("No AI provider is set up on the farm server")
+    spend_call()
+    if s["provider"] == "anthropic":
+        yield from _anthropic_events(messages, s, tools, run_tool, effort)
+        return
+    for text in stream(messages, s):
+        yield {"t": text}
+
+
+def complete_text(messages: list, s: Optional[dict] = None, effort: str = "low") -> str:
+    """The whole answer at once (the daily brief)."""
+    return "".join(ev.get("t", "") for ev in stream_events(messages, s, effort=effort))
+
+
+def complete_json(messages: list, schema: dict, s: Optional[dict] = None, effort: str = "medium") -> dict:
+    """One answer shaped by `schema`: constrained server-side with Claude;
+    JSON mode plus the schema in the prompt with the others, so the caller
+    still checks what came back (routers/ai.py does, block by block)."""
+    s = s or settings()
+    if not s:
+        raise AIError("No AI provider is set up on the farm server")
+    spend_call()
+    if s["provider"] == "anthropic":
+        return _anthropic_json(messages, schema, s, effort)
+    # The schema goes into the last user turn: the free-tier JSON modes
+    # take a MIME type or {"type": "json_object"}, not a schema.
+    messages = [dict(m) for m in messages]
+    messages[-1]["content"] += ("\n\nReply with one JSON object only, matching this schema exactly:\n"
+                                + _json.dumps(schema))
+    out = _complete_json_http(messages, s)
+    if not isinstance(out, dict):
+        raise AIError(f"{provider_name(s)}: the reply was not the JSON the app asked for - try again")
+    return out

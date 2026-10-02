@@ -12,7 +12,11 @@
 //     because it reads decades of weather;
 //   * Ask about this estimate (ai-panel.js) - questions in words, answered
 //     by the AI model set up on the farm server from these same figures,
-//     unsaved edits included.
+//     unsaved edits included; "What changed?" sends two versions through
+//     the same panel.
+//   * Check before I save - the same model's structured review: a flag and
+//     a history-backed kg/tree range per block, shown as badges on the
+//     rows and a findings card. Flags only; it never writes a figure.
 const LWEstimateTab = (() => {
   let _data = null;       // the last /api/estimate payload
   let _lines = [];        // working copy of the shown estimate's block lines
@@ -33,6 +37,9 @@ const LWEstimateTab = (() => {
   let _analogSeq = 0;
   let _analogFailed = false;
   let _ask = null;        // the LWAsk panel
+  let _aiStatus = null;   // /api/ai/status, for which AI buttons to show
+  let _review = null;     // the last /api/ai/review result for the shown version
+  let _reviewBusy = false;
 
   const RISK_CACHE_KEY = "boord_cached_risk";   // the Risk tab's own saved copy
   const $ = (id) => document.getElementById(id);
@@ -81,6 +88,12 @@ const LWEstimateTab = (() => {
     $("estName").addEventListener("input", () => setDirty(true));
     $("estNotes").addEventListener("input", () => setDirty(true));
     $("estXcRetry").addEventListener("click", () => loadCrosscheck({ force: true }));
+    $("estCheckBtn").addEventListener("click", runCheck);
+    $("estCompareBtn").addEventListener("click", compareVersions);
+    $("estReviewRows").addEventListener("click", (e) => {
+      const row = e.target.closest("tr[data-review-block]");
+      if (row) flashRow(row.dataset.reviewBlock);
+    });
 
     // Edits in the tables: delegated, so re-rendering rows needs no rebinding.
     $("estRows").addEventListener("input", (e) => {
@@ -97,6 +110,7 @@ const LWEstimateTab = (() => {
       setDirty(true);
       updateRowFigures(tr, line);
       renderTotals();
+      if (_review) renderReview();   // the "changed since this check" note
     });
     $("estRows").addEventListener("click", (e) => {
       const btn = e.target.closest("[data-remove]");
@@ -142,7 +156,9 @@ const LWEstimateTab = (() => {
       context: aiContext,
       questions: aiQuestions,
       actions: [{ label: "Add to notes", icon: "fa-note-sticky", show: () => !!(_data && _data.estimate), run: addToNotes }],
+      notesQuestions: aiNotesQuestions,
     });
+    loadAiStatus();
 
     window.addEventListener("beforeunload", (e) => {
       if (_dirty) { e.preventDefault(); e.returnValue = ""; }
@@ -188,6 +204,7 @@ const LWEstimateTab = (() => {
     _lines = data.estimate ? data.estimate.lines.map((l) => ({ ...l })) : [];
     _pack = data.estimate ? data.estimate.pack.map((p) => ({ ...p })) : [];
     setDirty(false);
+    if (_review && (_review.key !== reviewKey(data))) _review = null;   // another version or season
     render();
     // Neither is awaited: the editor is usable while they load.
     loadCrosscheck({ force: hard });
@@ -209,6 +226,9 @@ const LWEstimateTab = (() => {
       : `<option>None yet</option>`;
     $("estVersion").disabled = !d.estimates.length;
     ["estExportBtn", "estDeleteBtn", "estNewBtn"].forEach((id) => { $(id).disabled = !d.estimate; });
+    renderCompareOptions();
+    renderAiButtons();
+    renderReview();
 
     $("estEditor").classList.toggle("hidden", !d.estimate);
     $("estEmpty").classList.toggle("hidden", !!d.estimate);
@@ -248,7 +268,7 @@ const LWEstimateTab = (() => {
       const hist = r.history || {};
       const missing = !_data.blocks.some((b) => b.block_id === l.block_id);
       return `<tr data-block="${esc(l.block_id)}" class="border-b">
-        <td class="p-2 font-semibold">${esc(l.block_id)}${missing ? ` <i class="fa-solid fa-circle-info text-slate-400" title="Not in Boord's block register any more"></i>` : ""}</td>
+        <td class="p-2 font-semibold">${esc(l.block_id)}${missing ? ` <i class="fa-solid fa-circle-info text-slate-400" title="Not in Boord's block register any more"></i>` : ""}<span data-out="review"></span></td>
         <td class="p-2">${esc(r.variety || "")}</td>
         <td class="p-2"><input type="number" min="0" step="1" data-field="trees" value="${l.trees}" class="border border-slate-300 rounded-lg p-1.5" style="width:5.5rem"></td>
         ${years.map((y) => {
@@ -268,6 +288,7 @@ const LWEstimateTab = (() => {
     }).join("");
     $("estRows").querySelectorAll("tr[data-block]").forEach((tr) =>
       updateRowFigures(tr, _lines.find((l) => l.block_id === tr.dataset.block)));
+    applyReviewBadges();
 
     const absent = _data.blocks.filter((b) => !_lines.some((l) => l.block_id === b.block_id));
     $("estAddBlock").innerHTML = `<option value="">Add a block...</option>` +
@@ -892,6 +913,134 @@ const LWEstimateTab = (() => {
     }
   }
 
+  // ------------------------------------------------------- check & compare
+  async function loadAiStatus() {
+    try { _aiStatus = await Boord.api("/api/ai/status"); } catch (e) { _aiStatus = null; }
+    renderAiButtons();
+  }
+
+  function renderAiButtons() {
+    const on = !!(_aiStatus && _aiStatus.configured);
+    $("estCheckBtn").classList.toggle("hidden", !on || !(_data && _data.estimate));
+    $("estCompareWrap").classList.toggle("hidden", !on || !(_data && _data.estimates.length > 1));
+  }
+
+  function reviewKey(d) {
+    return `${d.season_year}:${d.estimate ? d.estimate.id : ""}`;
+  }
+
+  // "Check before I save": the structured review of what is on screen.
+  async function runCheck() {
+    if (!_data || !_data.estimate || _reviewBusy) return;
+    const ctx = aiContext();
+    if (!ctx) return;
+    _reviewBusy = true;
+    const btn = $("estCheckBtn");
+    btn.disabled = true;
+    btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Checking...`;
+    $("estReview").classList.remove("hidden");
+    $("estReviewOverall").innerHTML = `<span class="text-slate-500"><i class="fa-solid fa-spinner fa-spin"></i> Checking every block against its history...</span>`;
+    $("estReviewMeta").textContent = "";
+    $("estReviewFarm").innerHTML = "";
+    $("estReviewRows").innerHTML = "";
+    $("estReviewNote").textContent = "";
+    try {
+      const r = await Boord.api("/api/ai/review", { method: "POST", body: ctx.body, timeoutMs: 120000 });
+      _review = { ...r, key: reviewKey(_data), gen: _editGen };
+    } catch (e) {
+      console.error("Check failed:", e);
+      _review = null;
+      $("estReviewOverall").innerHTML = `<span class="text-red-700">${esc(
+        Boord.isNetworkError(e) ? "The farm server can't be reached."
+          : e.status === 422 ? "Some figure in the estimate is out of range - fix it, then check again."
+          : (typeof e.detail === "string" && e.detail) || "The check didn't come back - try again.")}</span>`;
+      applyReviewBadges();
+      return;
+    } finally {
+      _reviewBusy = false;
+      btn.disabled = false;
+      btn.innerHTML = `<i class="fa-solid fa-list-check text-slate-400"></i> Check before I save`;
+    }
+    renderReview();
+    $("estReview").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  const SEV_LABEL = { high: "High", medium: "Medium", low: "Low", ok: "OK" };
+
+  function renderReview() {
+    const r = _review;
+    const card = $("estReview");
+    if (!r || !_data || !_data.estimate) { card.classList.add("hidden"); applyReviewBadges(); return; }
+    card.classList.remove("hidden");
+    $("estReviewOverall").textContent = r.overall || "";
+    $("estReviewMeta").textContent = `${r.unsaved_changes_included ? "Checked with your unsaved changes" : "Checked the saved version"} · ${r.model || r.provider}`;
+    $("estReviewFarm").innerHTML = (r.farm_findings || []).map((f) => `<li>${esc(f)}</li>`).join("");
+    const range = (f) => (f.suggested_low_kg_tree == null && f.suggested_high_kg_tree == null ? "-"
+      : `${num(f.suggested_low_kg_tree)}${f.suggested_high_kg_tree != null && f.suggested_high_kg_tree !== f.suggested_low_kg_tree ? `-${num(f.suggested_high_kg_tree)}` : ""}`);
+    $("estReviewRows").innerHTML = `<tr class="text-left border-b"><th class="p-2">Block</th><th class="p-2">Flag</th><th class="p-2">Finding</th><th class="p-2 text-right" title="The kg/tree range the block's own history supports">History range</th><th class="p-2 text-right">Your kg/tree</th></tr>` +
+      (r.findings || []).map((f) => {
+        const line = _lines.find((l) => l.block_id === f.block);
+        return `<tr data-review-block="${esc(f.block)}" class="border-b cursor-pointer">
+          <td class="p-2 font-semibold">${esc(f.block)}</td>
+          <td class="p-2"><span class="review-badge sev-${f.severity}">${SEV_LABEL[f.severity]}</span></td>
+          <td class="p-2">${esc(f.finding)}</td>
+          <td class="p-2 text-right" style="white-space:nowrap">${range(f)}</td>
+          <td class="p-2 text-right">${line && line.kg_per_tree != null ? num(line.kg_per_tree) : "-"}</td></tr>`;
+      }).join("");
+    const notes = [];
+    if (r.dropped && r.dropped.length) notes.push(`The model also named ${r.dropped.join(", ")}, which ${r.dropped.length === 1 ? "isn't" : "aren't"} in this estimate - left out.`);
+    if (_editGen !== r.gen) notes.push("You've changed figures since this check - run it again before saving to be sure.");
+    $("estReviewNote").textContent = notes.join(" ");
+    applyReviewBadges();
+  }
+
+  // A badge in each row's Block cell, with the finding as its tooltip.
+  function applyReviewBadges() {
+    const by = new Map(((_review && _review.findings) || []).map((f) => [f.block, f]));
+    $("estRows").querySelectorAll("tr[data-block]").forEach((tr) => {
+      const slot = tr.querySelector('[data-out="review"]');
+      if (!slot) return;
+      const f = by.get(tr.dataset.block);
+      slot.innerHTML = f ? `<span class="review-badge sev-${f.severity}" title="${esc(f.finding)}">${SEV_LABEL[f.severity]}</span>` : "";
+    });
+  }
+
+  function flashRow(blockId) {
+    const tr = $("estRows").querySelector(`tr[data-block="${CSS.escape(blockId)}"]`);
+    if (!tr) return;
+    tr.scrollIntoView({ behavior: "smooth", block: "center" });
+    tr.classList.add("review-target");
+    setTimeout(() => tr.classList.remove("review-target"), 1500);
+  }
+
+  // "Compare with": every other version of the season, the previous one
+  // (by date) selected.
+  function renderCompareOptions() {
+    const d = _data;
+    const sel = $("estCompareWith");
+    if (!d.estimate || d.estimates.length < 2) { sel.innerHTML = ""; return; }
+    const others = d.estimates.filter((e) => e.id !== d.estimate.id);   // newest first, as the server sends them
+    const prev = others.find((e) => e.updated_at <= d.estimate.updated_at) || others[0];
+    sel.innerHTML = others.map((e) => `<option value="${e.id}" ${e.id === prev.id ? "selected" : ""}>${esc(e.name)} - ${Boord.fmtDateTime(e.updated_at)}</option>`).join("");
+  }
+
+  function compareVersions() {
+    const d = _data;
+    const otherId = parseInt($("estCompareWith").value, 10);
+    const other = d.estimates.find((e) => e.id === otherId);
+    if (!d.estimate || !other || !_ask) return;
+    if (_dirty) Boord.toast("Comparing the saved versions - unsaved changes aren't in it");
+    const [a, b] = other.updated_at <= d.estimate.updated_at ? [other, d.estimate] : [d.estimate, other];
+    _ask.askWith({
+      endpoint: "/api/ai/compare",
+      body: { from_id: a.id, to_id: b.id },
+      key: `compare:${a.id}:${b.id}`,
+      question: "What changed between these two versions, and what does it mean?",
+      shownAs: `What changed from "${a.name}" to "${b.name}"?`,
+    });
+    _ask.element.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
   // ------------------------------------------------------------------- ask
   // What Ask sends besides the question: the version on screen and, when
   // it has unsaved edits, the working copy itself - so "review this before
@@ -938,7 +1087,19 @@ const LWEstimateTab = (() => {
     if (modelOk) qs.push("How does it compare with the weather model?");
     if (analogsOk) qs.push("What do the similar seasons suggest?");
     if (d.estimates.length > 1) qs.push("How did the estimate move between versions?");
+    if (_aiStatus && _aiStatus.tools && _aiStatus.notes) qs.push("What do the farm notes say about the blocks that look out of line?");
     qs.push("Summarise this estimate for my notes");
+    return qs;
+  }
+
+  // Chips for "Ask the farm notes instead": about the blocks on screen.
+  function aiNotesQuestions() {
+    const d = _data;
+    if (!d) return [];
+    const blocks = _lines.length ? _lines.map((l) => l.block_id) : d.blocks.filter((b) => b.active).map((b) => b.block_id);
+    const qs = ["What was noted about this season so far?"];
+    blocks.slice(0, 3).forEach((b) => qs.push(`What has been noted about block ${b}?`));
+    qs.push("When did picking usually start, according to the notes?");
     return qs;
   }
 

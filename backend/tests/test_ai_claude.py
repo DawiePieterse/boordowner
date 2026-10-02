@@ -16,7 +16,7 @@ import ai_tools
 import config
 from models_owner import SeasonBrief
 from routers import ai as ai_router
-from tests.test_ai import _gemini_sse, _http_error, _ndjson
+from tests.test_ai import _gemini_sse, _http_error, _ndjson, gemini  # noqa: F401 - the fixture
 from tests.test_estimate import _seed_history
 
 
@@ -239,11 +239,7 @@ def test_sdk_errors_read_as_words(client, claude):
 # --------------------------------------------------------------------------- #
 # Finish reasons on the free-tier providers
 # --------------------------------------------------------------------------- #
-def test_gemini_truncation_is_reported_after_the_text(client, monkeypatch):
-    monkeypatch.setattr(config, "AI_PROVIDER", "gemini")
-    monkeypatch.setattr(config, "AI_API_KEY", "k")
-    monkeypatch.setattr(config, "AI_MODEL", "")
-    ai._usage.update(day=None, count=0)
+def test_gemini_truncation_is_reported_after_the_text(client, gemini, monkeypatch):
     lines = _gemini_sse("Block 7 ", "looks")
     lines.append(f"data: {json.dumps({'candidates': [{'content': {'parts': [{'text': ' fi'}]}, 'finishReason': 'MAX_TOKENS'}]})}\n".encode())
     monkeypatch.setattr(ai, "_post_stream", lambda url, headers, body: iter(lines))
@@ -316,12 +312,8 @@ def test_review_needs_an_estimate_and_counts_against_the_cap(client, claude):
     assert r.status_code == 503 and "declined" in r.json()["detail"]
 
 
-def test_review_on_a_free_tier_provider_uses_json_mode(client, monkeypatch):
+def test_review_on_a_free_tier_provider_uses_json_mode(client, gemini, monkeypatch):
     _estimate(client)
-    monkeypatch.setattr(config, "AI_PROVIDER", "gemini")
-    monkeypatch.setattr(config, "AI_API_KEY", "k")
-    monkeypatch.setattr(config, "AI_MODEL", "")
-    ai._usage.update(day=None, count=0)
     seen = {}
 
     def fake_post(url, headers, body):
@@ -417,14 +409,15 @@ def test_notes_bridge_streams_the_answer_and_sources(client, monkeypatch, claude
     monkeypatch.setattr(config, "NOTES_PUBLIC_URL", "https://farm.tailnet.ts.net:9443")
     seen = {}
 
-    def fake_post(url, body, timeout):
-        seen["url"], seen["body"] = url, body
-        return {"answer": "Spray in week 2 of October.", "notes_considered": 3, "notes_total": 40,
-                "sources": [{"id": "x", "title": "Spuitprogram", "created_at": "2024-10-02T08:00:00"}]}
-    monkeypatch.setattr(ai_tools, "_post_json", fake_post)
+    def fake_post(url, headers, body, timeout=None):
+        seen["url"], seen["body"], seen["timeout"] = url, body, timeout
+        return iter([json.dumps({"answer": "Spray in week 2 of October.", "notes_considered": 3, "notes_total": 40,
+                                 "sources": [{"id": "x", "title": "Spuitprogram", "created_at": "2024-10-02T08:00:00"}]}).encode()])
+    monkeypatch.setattr(ai, "_post_stream", fake_post)
     assert client.get("/api/ai/status").json()["notes"] is True
     events = _ndjson(client.post("/api/ai/notes", json={"question": "When do we spray block 4?"}))
     assert seen["url"] == "http://127.0.0.1:8020/api/ai/ask" and seen["body"] == {"question": "When do we spray block 4?"}
+    assert seen["timeout"] == ai_tools.NOTES_TIMEOUT_S
     assert events[0] == {"t": "Spray in week 2 of October."}
     done = events[-1]
     assert done["provider"] == "Boord Notes" and done["notes_total"] == 40
@@ -435,17 +428,17 @@ def test_notes_bridge_passes_notes_own_sentence_through(client, monkeypatch, cla
     claude()
     monkeypatch.setattr(config, "NOTES_URL", "http://127.0.0.1:8020")
 
-    def fake_post(url, body, timeout):
+    def fake_post(url, headers, body, timeout=None):
         raise urllib.error.HTTPError(url, 503, "x", {}, BytesIO(json.dumps({"detail": "AI help is not set up on the server yet."}).encode()))
-    monkeypatch.setattr(ai_tools, "_post_json", fake_post)
+    monkeypatch.setattr(ai, "_post_stream", fake_post)
     events = _ndjson(client.post("/api/ai/notes", json={"question": "q"}))
     assert events == [{"error": "Boord Notes: AI help is not set up on the server yet."}]
 
 
 def test_notes_become_a_tool_for_claude(client, monkeypatch, claude):
     monkeypatch.setattr(config, "NOTES_URL", "http://127.0.0.1:8020")
-    monkeypatch.setattr(ai_tools, "_post_json", lambda url, body, timeout: {
-        "answer": "Andre noted hail on 8a in 2023.", "sources": [{"title": "Hael", "created_at": "2023-11-01"}]})
+    monkeypatch.setattr(ai, "_post_stream", lambda url, headers, body, timeout=None: iter([json.dumps({
+        "answer": "Andre noted hail on 8a in 2023.", "sources": [{"title": "Hael", "created_at": "2023-11-01"}]}).encode()]))
     fake = claude(
         message([tool_block("farm_notes", {"question": "What was noted about 8a?"})], stop_reason="tool_use"),
         message([text_block("The notes mention hail on 8a in 2023 (Hael, 2023-11-01).")]),

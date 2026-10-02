@@ -44,7 +44,7 @@ Around Ask, four more uses of the same summary:
     own Ask, over localhost, with the notes it used listed.
 """
 import json
-from datetime import date, datetime
+from datetime import date
 from types import SimpleNamespace
 from typing import List, Literal, Optional
 
@@ -60,7 +60,7 @@ from db import boord_engine, owner_engine
 from models_owner import SeasonBrief, YieldEstimate, YieldEstimateBlock
 from routers.analogs import build_analogs
 from routers.estimate import (EstimateForecastIn, EstimateLineIn, PackLineIn, _crosscheck,
-                              _packout, _r, estimate_view)
+                              _packout, _r, _utcnow, estimate_view)
 from routers.risk import _expected_kg_history
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -373,10 +373,11 @@ def build_estimate_summary(boord: Session, owner: Session, body: AskIn, today: d
                    "unfavorable_kg": snap["unfavorable_kg"], "live_weather_forecast_used": snap["live"],
                    "factors_settled": snap["settled"]}
     # The owner's judgement comes first: the weather model is not put in
-    # front of the model (or the owner, through an answer) until at least
-    # one block carries a figure. The tab keeps the model's card below the
-    # editor for the same reason.
-    if weather and not totals["blocks_estimated"]:
+    # front of the model (or the owner, through an answer) until the
+    # estimate has a total to set against it - the same rule as the tab's
+    # cross-check card (_crosscheck returns nothing for an empty total),
+    # which also sits below the editor for this reason.
+    if weather and not total:
         weather = None
     if weather:
         weather["factor_count"] = 4
@@ -475,15 +476,18 @@ def ai_status():
             "calls_today": ai.calls_today(), "daily_limit": config.AI_DAILY_LIMIT}
 
 
-def _ndjson(events, s: dict, done: dict):
+def _ndjson(events, done: dict, s: Optional[dict] = None, provider: str = "", model: str = ""):
     """NDJSON: {"t": text} per piece as it arrives, {"step": sentence} when
     the model looks something up, then {"done": ...} or {"error": message}.
     A refusal mid-answer still reaches the browser as words - the HTTP
-    status went out with the first line."""
+    status went out with the first line. The answerer is named from `s`,
+    or by `provider`/`model` when it is not one of ai.py's."""
+    if s:
+        provider, model = ai.provider_name(s), ai.model_for(s)
     try:
         for ev in events:
             yield json.dumps(ev) + "\n"
-        yield json.dumps({"done": True, "provider": ai.provider_name(s), "model": ai.model_for(s), **done}) + "\n"
+        yield json.dumps({"done": True, "provider": provider, "model": model, **done}) + "\n"
     except ai.AIError as e:
         yield json.dumps({"error": str(e)}) + "\n"
 
@@ -514,7 +518,7 @@ def ask(body: AskIn):
     messages = build_messages(summary, body.question, history, system=_ask_system(s))
     tools = ai_tools.available_tools() if ai.has_tools(s) else None
     events = ai.stream_events(messages, s, tools=tools, run_tool=ai_tools.run_tool, effort="low")
-    return _stream_response(_ndjson(events, s, summary["_check"]))
+    return _stream_response(_ndjson(events, summary["_check"], s))
 
 
 def _clean_findings(result: dict, check: dict) -> dict:
@@ -619,7 +623,7 @@ def compare(body: CompareIn):
     history = [t.model_dump() for t in body.history]
     messages = build_messages(summary, body.question, history, system=COMPARE_SYSTEM, template=COMPARE_TEMPLATE)
     events = ai.stream_events(messages, s, effort="low")
-    return _stream_response(_ndjson(events, s, summary["_check"]))
+    return _stream_response(_ndjson(events, summary["_check"], s))
 
 
 # --------------------------------------------------------------------------- #
@@ -657,11 +661,10 @@ def build_brief(today: Optional[date] = None) -> dict:
     if not text:
         raise ai.AIError("The model wrote nothing - try again")
     with Session(owner_engine) as owner:
-        row = owner.exec(select(SeasonBrief).where(SeasonBrief.brief_date == today)).first()
-        if row is None:
-            row = SeasonBrief(brief_date=today, season_year=summary["context"]["season_year"], text=text)
+        row = (owner.exec(select(SeasonBrief).where(SeasonBrief.brief_date == today)).first()
+               or SeasonBrief(brief_date=today, season_year=0, text="", built_at=_utcnow()))
         row.season_year, row.text = summary["context"]["season_year"], text
-        row.provider, row.model, row.built_at = ai.provider_name(s), ai.model_for(s), datetime.utcnow()
+        row.provider, row.model, row.built_at = ai.provider_name(s), ai.model_for(s), _utcnow()
         owner.add(row)
         owner.commit()
         owner.refresh(row)
@@ -695,9 +698,8 @@ def get_brief():
 
 @router.post("/brief/refresh")
 def refresh_brief():
-    _settings_or_503()
     try:
-        return build_brief()
+        return build_brief()   # says so, as a 503, when no provider is set up
     except ai.AIError as e:
         raise HTTPException(503, str(e))
 
@@ -712,14 +714,10 @@ def ask_notes(body: NotesIn):
     Works with any provider here, or none - the model answering is Notes'."""
     if not ai_tools.notes_configured():
         raise HTTPException(503, "Boord Notes isn't linked to this app (see README, OWNER_NOTES_URL)")
+    done = {}
 
     def events():
-        try:
-            r = ai_tools.farm_notes(body.question)
-        except RuntimeError as e:
-            yield json.dumps({"error": str(e)}) + "\n"
-            return
-        yield json.dumps({"t": r["answer"]}) + "\n"
-        yield json.dumps({"done": True, "provider": "Boord Notes", "model": "", "sources": r["sources"],
-                          "notes_considered": r["notes_considered"], "notes_total": r["notes_total"]}) + "\n"
-    return _stream_response(events())
+        r = ai_tools.farm_notes(body.question)   # raises ai.AIError, which _ndjson reports
+        done.update(sources=r["sources"], notes_considered=r["notes_considered"], notes_total=r["notes_total"])
+        yield {"t": r["answer"]}
+    return _stream_response(_ndjson(events(), done, provider="Boord Notes"))

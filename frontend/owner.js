@@ -202,17 +202,21 @@ function renderBrief(b, { configured = true, cachedAt = null } = {}) {
   meta.textContent = `Written ${when}${cachedAt ? " (saved on this device)" : ""} · ${b.model || b.provider} · can be wrong, check the tabs`;
 }
 
+// The server's copy, through the same saved-copy envelope every tab uses
+// (Boord.cachedLoad): shown from the device when the server can't be reached.
+function showCachedBrief() {
+  const saved = Boord.getCachedJSON(BRIEF_CACHE_KEY);
+  if (saved && saved.data) renderBrief(saved.data.brief, { configured: saved.data.configured, cachedAt: saved.at });
+}
+
 async function loadBrief() {
   let r;
   try {
-    r = await Boord.api("/api/ai/brief", { timeoutMs: 15000 });
+    r = await Boord.cachedLoad(BRIEF_CACHE_KEY, () => Boord.api("/api/ai/brief", { timeoutMs: 15000 }));
   } catch (e) {
-    const saved = Boord.getCachedJSON(BRIEF_CACHE_KEY);
-    if (saved && saved.data) renderBrief(saved.data.brief, { configured: true, cachedAt: saved.at });
-    return;
+    return;   // nothing saved either; api() has already flagged a lost connection
   }
-  localStorage.setItem(BRIEF_CACHE_KEY, JSON.stringify({ data: r, at: Date.now() }));
-  renderBrief(r.brief, { configured: r.configured });
+  renderBrief(r.data.brief, { configured: r.data.configured, cachedAt: r.cached ? r.at : null });
 }
 
 async function refreshBrief() {
@@ -220,9 +224,9 @@ async function refreshBrief() {
   btn.disabled = true;
   btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Writing...`;
   try {
-    const r = await Boord.api("/api/ai/brief/refresh", { method: "POST", timeoutMs: 120000 });
-    localStorage.setItem(BRIEF_CACHE_KEY, JSON.stringify({ data: { ...r, configured: true }, at: Date.now() }));
-    renderBrief(r.brief);
+    const r = await Boord.cachedLoad(BRIEF_CACHE_KEY, async () =>
+      ({ ...(await Boord.api("/api/ai/brief/refresh", { method: "POST", timeoutMs: 120000 })), configured: true }));
+    renderBrief(r.data.brief, { configured: true, cachedAt: r.cached ? r.at : null });
   } catch (e) {
     console.error("Brief refresh failed:", e);
     Boord.toast(typeof e.detail === "string" && e.detail ? e.detail : "Could not write the brief");
@@ -536,8 +540,7 @@ function init() {
   activateTab("dashboard");
 
   // Show the last figures this device saw before touching the network.
-  const cachedBrief = Boord.getCachedJSON(BRIEF_CACHE_KEY);
-  if (cachedBrief && cachedBrief.data) renderBrief(cachedBrief.data.brief, { configured: cachedBrief.data.configured, cachedAt: cachedBrief.at });
+  showCachedBrief();
   const cachedDash = findCachedDashboard(currentQuery());
   if (cachedDash && renderCachedDashboard(currentQuery())) {
     setOfflineBannerText(`Offline - showing figures from ${describeAge(cachedDash.at)}`);

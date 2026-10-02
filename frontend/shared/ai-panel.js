@@ -11,6 +11,8 @@
 //   questions() -> the suggested-question chips for what is on screen
 //   actions     -> extra buttons under an answer, e.g. "Add to notes"
 //   notesQuestions() -> chips for "Ask the farm notes" mode (optional)
+//   onStatus(s) -> called with /api/ai/status whenever the panel (re)loads
+//                  it, so the tab can show its own AI buttons from the one copy
 // It never writes anything itself - an answer is only read, copied, or
 // handed to an action the owner presses.
 //
@@ -109,13 +111,13 @@ const LWAsk = (() => {
   }
 
   function create({ el, title = "Ask about this", context, questions, actions = [], placeholder = "",
-                    notesQuestions = null }) {
+                    notesQuestions = null, onStatus = null }) {
     let _history = [];         // [{q, a}] about the current key
     let _key = null;
     let _controller = null;
     let _answer = "";
     let _chipSig = "";
-    let _route = null;         // {endpoint, body, key} an askWith() left for follow-ups
+    let _route = null;         // the route an askWith() set; follow-ups keep it, a new question clears it
 
     el.innerHTML = `
       <div class="flex flex-wrap items-center justify-between gap-2">
@@ -182,6 +184,7 @@ const LWAsk = (() => {
     // once the status is known, and it retries after an offline start.
     async function refresh() {
       const s = await loadStatus();
+      if (onStatus) onStatus(s);
       if (!s) {
         part("setup").textContent = _status ? "" : "Can't reach the farm server to check whether Ask is set up.";
         part("setup").classList.toggle("hidden", !!_status);
@@ -202,21 +205,23 @@ const LWAsk = (() => {
       renderChips();
     }
 
-    // Where a question goes: Notes when the toggle is on, the route an
-    // askWith() set (until the owner asks about the estimate again from a
-    // chip or the box - a plain ask() clears it), else the estimate.
-    function routeFor(question, route) {
-      if (route) return route;
-      if (notesMode()) return { endpoint: "/api/ai/notes", body: { question }, key: "notes", history: false };
+    // Where a new question goes: the notes when the toggle is on, else the
+    // estimate. `history` also says whether the answer is checked against
+    // the figures (and retried when it echoes them); `reading` is the
+    // spinner's word for what is being read.
+    function routeFor(question) {
+      if (notesMode()) return { endpoint: "/api/ai/notes", body: { question }, key: "notes", history: false, reading: "the notes" };
       const ctx = context();
-      return ctx ? { endpoint: "/api/ai/ask", body: ctx.body, key: ctx.key, history: true } : null;
+      return ctx ? { endpoint: "/api/ai/ask", body: ctx.body, key: ctx.key, history: true, reading: "the figures" } : null;
     }
 
+    // A typed or chip question is a new question and drops any askWith()
+    // route; a follow-up or retry passes the route it continues.
     async function ask(question, { retried = false, shownAs = null, route = null } = {}) {
       question = (question || "").trim().slice(0, MAX_QUESTION);
       if (!question || _controller) return;
-      if (!route && !notesMode()) _route = null;   // back to the estimate
-      const r = routeFor(question, route || _route);
+      if (!route) _route = null;
+      const r = route || routeFor(question);
       if (!r) return;
       if (r.key !== _key) { _history = []; _key = r.key; }
       const shown = shownAs || question;
@@ -232,13 +237,13 @@ const LWAsk = (() => {
       part("note").textContent = "";
       part("answer").classList.remove("hidden");
       part("sources").classList.add("hidden");
-      part("answer").innerHTML = `<p class="text-slate-500"><i class="fa-solid fa-spinner fa-spin"></i> ${r.endpoint === "/api/ai/notes" ? "Reading the notes..." : "Reading the figures..."}</p>`;
+      part("answer").innerHTML = `<p class="text-slate-500"><i class="fa-solid fa-spinner fa-spin"></i> Reading ${r.reading}...</p>`;
       part("status").textContent = `Q: ${shown}`;
 
       let text = "", done = null, error = null;
       try {
         const payload = { ...r.body, question: retried ? `${question}\n\n${PROSE_REMINDER}` : question };
-        if (r.history !== false) payload.history = _history.slice(-3);
+        if (r.history) payload.history = _history.slice(-3);
         const res = await fetch(r.endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -291,7 +296,7 @@ const LWAsk = (() => {
         setBusy(false);
       }
 
-      if (!error && text && !retried && r.history !== false && checkAnswer(text, done).retry) {
+      if (!error && text && !retried && r.history && checkAnswer(text, done).retry) {
         // Small models sometimes echo the JSON back: ask once more, in words.
         return ask(question, { retried: true, shownAs: shown, route: r });
       }
@@ -308,7 +313,8 @@ const LWAsk = (() => {
       _history.push({ q: shown, a: text });
       const { note } = checkAnswer(text, done);
       part("note").textContent = [error, note].filter(Boolean).join(" ");
-      part("status").textContent = `Q: ${shown}${done && done.model ? ` · ${done.model}` : done && done.provider ? ` · ${done.provider}` : ""}`;
+      const by = done && (done.model || done.provider);
+      part("status").textContent = `Q: ${shown}${by ? ` · ${by}` : ""}`;
       renderSources(done);
       renderTools();
     }
@@ -329,8 +335,8 @@ const LWAsk = (() => {
 
     // Send the panel somewhere else on the server with its own body; the
     // route stays for follow-ups until the owner asks about the estimate again.
-    function askWith({ endpoint, body, key, question, shownAs = null }) {
-      _route = { endpoint, body, key, history: true };
+    function askWith({ endpoint, body, key, question, shownAs = null, reading = "the figures" }) {
+      _route = { endpoint, body, key, history: true, reading };
       part("notesMode").checked = false;
       return ask(question, { shownAs, route: _route });
     }
@@ -361,7 +367,7 @@ const LWAsk = (() => {
     });
 
     refresh();
-    return { refresh, ask, askWith, element: el };
+    return { refresh, ask, askWith, status: loadStatus, element: el };
   }
 
   return { create, renderMarkdown, checkAnswer, plainText };

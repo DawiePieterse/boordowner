@@ -37,9 +37,8 @@ const LWEstimateTab = (() => {
   let _analogSeq = 0;
   let _analogFailed = false;
   let _ask = null;        // the LWAsk panel
-  let _aiStatus = null;   // /api/ai/status, for which AI buttons to show
+  let _aiStatus = null;   // /api/ai/status, as the Ask panel last loaded it
   let _review = null;     // the last /api/ai/review result for the shown version
-  let _reviewBusy = false;
 
   const RISK_CACHE_KEY = "boord_cached_risk";   // the Risk tab's own saved copy
   const $ = (id) => document.getElementById(id);
@@ -110,7 +109,7 @@ const LWEstimateTab = (() => {
       setDirty(true);
       updateRowFigures(tr, line);
       renderTotals();
-      if (_review) renderReview();   // the "changed since this check" note
+      renderReviewNote();   // "changed since this check"
     });
     $("estRows").addEventListener("click", (e) => {
       const btn = e.target.closest("[data-remove]");
@@ -157,8 +156,8 @@ const LWEstimateTab = (() => {
       questions: aiQuestions,
       actions: [{ label: "Add to notes", icon: "fa-note-sticky", show: () => !!(_data && _data.estimate), run: addToNotes }],
       notesQuestions: aiNotesQuestions,
+      onStatus: (s) => { _aiStatus = s; renderAiButtons(); },
     });
-    loadAiStatus();
 
     window.addEventListener("beforeunload", (e) => {
       if (_dirty) { e.preventDefault(); e.returnValue = ""; }
@@ -204,7 +203,7 @@ const LWEstimateTab = (() => {
     _lines = data.estimate ? data.estimate.lines.map((l) => ({ ...l })) : [];
     _pack = data.estimate ? data.estimate.pack.map((p) => ({ ...p })) : [];
     setDirty(false);
-    if (_review && (_review.key !== reviewKey(data))) _review = null;   // another version or season
+    if (_review && _review.key !== aiContext().key) _review = null;   // another version or season
     render();
     // Neither is awaited: the editor is usable while they load.
     loadCrosscheck({ force: hard });
@@ -914,28 +913,18 @@ const LWEstimateTab = (() => {
   }
 
   // ------------------------------------------------------- check & compare
-  async function loadAiStatus() {
-    try { _aiStatus = await Boord.api("/api/ai/status"); } catch (e) { _aiStatus = null; }
-    renderAiButtons();
-  }
-
   function renderAiButtons() {
     const on = !!(_aiStatus && _aiStatus.configured);
     $("estCheckBtn").classList.toggle("hidden", !on || !(_data && _data.estimate));
     $("estCompareWrap").classList.toggle("hidden", !on || !(_data && _data.estimates.length > 1));
   }
 
-  function reviewKey(d) {
-    return `${d.season_year}:${d.estimate ? d.estimate.id : ""}`;
-  }
-
   // "Check before I save": the structured review of what is on screen.
   async function runCheck() {
-    if (!_data || !_data.estimate || _reviewBusy) return;
+    const btn = $("estCheckBtn");
+    if (!_data || !_data.estimate || btn.disabled) return;
     const ctx = aiContext();
     if (!ctx) return;
-    _reviewBusy = true;
-    const btn = $("estCheckBtn");
     btn.disabled = true;
     btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Checking...`;
     $("estReview").classList.remove("hidden");
@@ -946,7 +935,7 @@ const LWEstimateTab = (() => {
     $("estReviewNote").textContent = "";
     try {
       const r = await Boord.api("/api/ai/review", { method: "POST", body: ctx.body, timeoutMs: 120000 });
-      _review = { ...r, key: reviewKey(_data), gen: _editGen };
+      _review = { ...r, key: ctx.key, gen: _editGen };
     } catch (e) {
       console.error("Check failed:", e);
       _review = null;
@@ -957,7 +946,6 @@ const LWEstimateTab = (() => {
       applyReviewBadges();
       return;
     } finally {
-      _reviewBusy = false;
       btn.disabled = false;
       btn.innerHTML = `<i class="fa-solid fa-list-check text-slate-400"></i> Check before I save`;
     }
@@ -987,11 +975,18 @@ const LWEstimateTab = (() => {
           <td class="p-2 text-right" style="white-space:nowrap">${range(f)}</td>
           <td class="p-2 text-right">${line && line.kg_per_tree != null ? num(line.kg_per_tree) : "-"}</td></tr>`;
       }).join("");
+    renderReviewNote();
+    applyReviewBadges();
+  }
+
+  // The line under the findings - the one part of the card an edit changes.
+  function renderReviewNote() {
+    const r = _review;
+    if (!r) return;
     const notes = [];
     if (r.dropped && r.dropped.length) notes.push(`The model also named ${r.dropped.join(", ")}, which ${r.dropped.length === 1 ? "isn't" : "aren't"} in this estimate - left out.`);
     if (_editGen !== r.gen) notes.push("You've changed figures since this check - run it again before saving to be sure.");
     $("estReviewNote").textContent = notes.join(" ");
-    applyReviewBadges();
   }
 
   // A badge in each row's Block cell, with the finding as its tooltip.
@@ -1085,8 +1080,8 @@ const LWEstimateTab = (() => {
     const qs = ["Review this estimate", "Which blocks look out of line with their history?"];
     if (d.progress && d.progress.actual_kg) qs.push("Are we on track?");
     // The owner's call comes first: the weather model is offered only once
-    // at least one block carries a figure (same rule as the server's summary).
-    if (modelOk && _lines.some((l) => l.kg_per_tree != null)) qs.push("How does it compare with the weather model?");
+    // the estimate has a total - the cross-check card's rule, and the server's.
+    if (modelOk && estimateTotal() > 0) qs.push("How does it compare with the weather model?");
     if (analogsOk) qs.push("What do the similar seasons suggest?");
     if (d.estimates.length > 1) qs.push("How did the estimate move between versions?");
     if (_aiStatus && _aiStatus.tools && _aiStatus.notes) qs.push("What do the farm notes say about the blocks that look out of line?");

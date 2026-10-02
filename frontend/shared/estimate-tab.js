@@ -379,12 +379,12 @@ const LWEstimateTab = (() => {
   function renderPack() {
     $("estPackHead").innerHTML = `<tr class="text-left border-b">
       <th class="p-2">Channel</th><th class="p-2">Pack type</th>
-      <th class="p-2" title="What one carton takes from the picked fruit, give-away included. Empty = not cartoned (juice, rejects).">Kg/carton</th>
+      <th class="p-2" title="Measured on the packed fruit after juice is taken off: (picked kg minus juice kg) divided by the units packed, give-away included - the 2025 sheet's method, not the Produksie sheet's. Empty = not cartoned (juice, rejects).">Kg/carton</th>
       <th class="p-2">% of picked</th><th class="p-2 text-right">Kg</th><th class="p-2 text-right">Cartons</th>
       <th class="p-2">Note</th><th class="p-2"></th></tr>`;
     $("estPackRows").innerHTML = _pack.map((p, i) => `<tr data-pack-index="${i}" class="border-b">
       <td class="p-2"><input type="text" maxlength="60" list="estPackChannelList" data-field="channel" value="${esc(p.channel)}" class="border border-slate-300 rounded-lg p-1.5" style="width:9rem" placeholder="e.g. Export sea"></td>
-      <td class="p-2"><input type="text" maxlength="60" data-field="pack_type" value="${esc(p.pack_type)}" class="border border-slate-300 rounded-lg p-1.5" style="width:7rem" placeholder="e.g. 4.5 kg"></td>
+      <td class="p-2"><input type="text" maxlength="60" data-field="pack_type" value="${esc(p.pack_type)}" class="border border-slate-300 rounded-lg p-1.5" style="width:7rem" placeholder="e.g. 2 kg"></td>
       <td class="p-2"><input type="number" min="0" max="50" step="0.05" data-field="kg_per_carton" value="${p.kg_per_carton == null ? "" : p.kg_per_carton}" class="border border-slate-300 rounded-lg p-1.5" style="width:5.5rem"></td>
       <td class="p-2"><input type="number" min="0" max="100" step="0.1" data-field="share_pct" value="${p.share_pct == null ? "" : p.share_pct}" class="border border-slate-300 rounded-lg p-1.5" style="width:5.5rem"></td>
       <td class="p-2 text-right" data-out="kg"></td>
@@ -1084,7 +1084,9 @@ const LWEstimateTab = (() => {
     }
     const qs = ["Review this estimate", "Which blocks look out of line with their history?"];
     if (d.progress && d.progress.actual_kg) qs.push("Are we on track?");
-    if (modelOk) qs.push("How does it compare with the weather model?");
+    // The owner's call comes first: the weather model is offered only once
+    // at least one block carries a figure (same rule as the server's summary).
+    if (modelOk && _lines.some((l) => l.kg_per_tree != null)) qs.push("How does it compare with the weather model?");
     if (analogsOk) qs.push("What do the similar seasons suggest?");
     if (d.estimates.length > 1) qs.push("How did the estimate move between versions?");
     if (_aiStatus && _aiStatus.tools && _aiStatus.notes) qs.push("What do the farm notes say about the blocks that look out of line?");

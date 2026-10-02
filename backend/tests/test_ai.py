@@ -254,3 +254,27 @@ def test_ask_validates_like_a_save(client, gemini):
         "lines": [{"block_id": "7", "trees": -1}]}})
     assert r.status_code == 422
     assert client.post("/api/ai/ask", json={"season": 2026, "question": ""}).status_code == 422
+
+
+def test_weather_model_waits_for_the_owners_figures(client, gemini, monkeypatch):
+    """Andre's call: the weather model only after his own estimate. With no
+    block estimated yet, the summary carries no weather figures even when
+    the browser sends live ones; one figure, and they are in."""
+    _seed_history()
+    est = client.post("/api/estimate", json={"season_year": 2026, "name": "January"}).json()
+    forecast = {"season_year": 2026, "built_at": datetime.now(timezone.utc).isoformat(),
+                "favorable_kg": 110_000, "expected_kg": 80_000, "unfavorable_kg": 60_000,
+                "live": True, "settled": 1}
+    seen, counter = _capture(monkeypatch)
+    try:
+        client.post("/api/ai/ask", json={"season": 2026, "estimate_id": est["id"], "question": "Review",
+                                         "forecast": forecast,
+                                         "draft": {"lines": [{"block_id": "7", "trees": 2000, "kg_per_tree": None}]}})
+        assert _summary_sent(seen)["weather_model"] is None
+        assert not any("weather model" in h for h in _summary_sent(seen)["highlights"])
+        client.post("/api/ai/ask", json={"season": 2026, "estimate_id": est["id"], "question": "Review",
+                                         "forecast": forecast,
+                                         "draft": {"lines": [{"block_id": "7", "trees": 2000, "kg_per_tree": 40.0}]}})
+        assert _summary_sent(seen)["weather_model"]["expected_kg"] == 80_000
+    finally:
+        counter.__exit__()

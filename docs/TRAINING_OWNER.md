@@ -169,6 +169,14 @@ Things to keep in mind:
   block's whole record, a season's weather, how a season's picking ran. The
   panel says what it is looking up while you wait.
 
+### The pack-out mix
+
+One split for the whole farm, as a share of the picked kg. Juice is its own
+line with no kg per carton; the packed lines carry the kg one unit takes,
+measured the way the 2025 sheet does it: picked kg minus juice kg, divided
+by the units packed. Do not use the Produksie sheet's figure for that, which
+divides before the juice is taken off and so reads higher.
+
 ### Check before I save
 
 Next to **Save** is **Check before I save**. The model goes through every

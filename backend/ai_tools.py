@@ -19,18 +19,19 @@ used come back here as data.
 """
 import json
 import urllib.error
-import urllib.request
 from datetime import date
 from typing import Optional
 
 from sqlmodel import Session, select
 
+import ai
 import config
 from db import boord_engine, owner_engine
 from models_owner import WeatherHistory
-from routers.analogs import _season_timing, _weather_values
+from routers.analogs import _mean, _r, _season_timing, _weather_values
 from routers.analysis import block_season_kg, season_day_kg
 from routers.risk import DRIVERS
+from weather import cached_history_stat
 
 NOTES_TIMEOUT_S = 110   # Notes' own Ask reads every note: slow, not stuck
 
@@ -46,6 +47,7 @@ TOOLS = [
             "block_id": {"type": "string", "description": "The block as the summary names it, e.g. \"8a\""}},
             "required": ["block_id"], "additionalProperties": False},
         "step": lambda i: f"Looking up block {i.get('block_id', '?')}'s history...",
+        "run": lambda i: block_history(str(i.get("block_id", ""))),
     },
     {
         "name": "season_weather",
@@ -58,6 +60,7 @@ TOOLS = [
             "year": {"type": "integer", "description": "The season year, e.g. 2022"}},
             "required": ["year"], "additionalProperties": False},
         "step": lambda i: f"Looking up {i.get('year', '?')}'s weather...",
+        "run": lambda i: season_weather(int(i["year"])),
     },
     {
         "name": "picking_pace",
@@ -70,6 +73,7 @@ TOOLS = [
             "block_id": {"type": "string", "description": "Optional: one block; leave out for the whole farm"}},
             "required": ["year"], "additionalProperties": False},
         "step": lambda i: f"Looking up {i.get('year', '?')}'s picking{(' on block ' + str(i['block_id'])) if i.get('block_id') else ''}...",
+        "run": lambda i: picking_pace(int(i["year"]), i.get("block_id")),
     },
 ]
 
@@ -84,6 +88,7 @@ NOTES_TOOL = {
         "question": {"type": "string", "description": "The question for the notes, in English or Afrikaans"}},
         "required": ["question"], "additionalProperties": False},
     "step": lambda i: "Asking the farm notes...",
+    "run": lambda i: farm_notes(str(i.get("question", ""))),
 }
 
 
@@ -91,10 +96,6 @@ def available_tools() -> list:
     """The tools for one Ask: the three lookups, plus the notes when Boord
     Notes is reachable by configuration."""
     return TOOLS + ([NOTES_TOOL] if config.NOTES_URL else [])
-
-
-def _r(x, nd=1):
-    return round(x, nd) if x is not None else None
 
 
 # --------------------------------------------------------------------------- #
@@ -112,6 +113,7 @@ def block_history(block_id: str) -> dict:
         return {"error": f"No block {block_id!r} on this farm. Blocks on file: "
                          + ", ".join(sorted(s["blocks"]))}
     trees = (b.trees or 0) if b else 0
+    mine = {k: v for k, v in s["day_kg"].items() if k[1] == block_id}
     seasons = []
     for y in sorted(years):
         kg = years[y]
@@ -119,7 +121,7 @@ def block_history(block_id: str) -> dict:
                "annual_total_only": y in annual_only,
                "in_progress": y == s["current_year"]}
         if y not in annual_only:
-            timing = _season_timing({k: v for k, v in s["day_kg"].items() if k[1] == block_id}, y)
+            timing = _season_timing(mine, y)
             if timing:
                 row.update({"first_pick": timing["first_date"], "got_going": timing["start_date"],
                             "last_pick": timing["last_date"], "span_days": timing["span_days"]})
@@ -151,7 +153,7 @@ def _month_summary(owner: Session, year: int) -> list:
     for month in sorted(by_month):
         m = by_month[month]
         out.append({"month": date(year, month, 1).strftime("%b"), "hours_on_file": m["hours"],
-                    "mean_temp_c": _r(sum(m["temps"]) / len(m["temps"]), 1) if m["temps"] else None,
+                    "mean_temp_c": _r(_mean(m["temps"])),
                     "max_temp_c": _r(max(m["temps"]), 1) if m["temps"] else None,
                     "rain_mm": _r(m["rain"], 0), "sunshine_hours": _r(m["sun_s"] / 3600, 0)})
     return out
@@ -164,7 +166,10 @@ def season_weather(year: int) -> dict:
         last = owner.exec(select(WeatherHistory.timestamp).order_by(WeatherHistory.timestamp.desc())).first()
         if first is None:
             return {"error": "No weather on file yet - the Weather tab fetches it."}
-        values = _weather_values(owner, spec, first.year, last.year)
+        # The whole record, every year: cached until the weather changes,
+        # the way the similar-seasons scan is.
+        values = cached_history_stat(owner, ("ai_season_weather", spec, first.year, last.year),
+                                     lambda: _weather_values(owner, spec, first.year, last.year))
         months = _month_summary(owner, year)
     if year not in values or not any(v is not None for v in values[year].values()) and not months:
         return {"error": f"No weather on file for {year}. Seasons on file: {first.year}-{last.year}."}
@@ -174,7 +179,7 @@ def season_weather(year: int) -> dict:
         others = [v[k] for y, v in values.items() if y != year and v.get(k) is not None]
         factors.append({"factor": d["label"], "window": d["window_label"], "unit": d["unit"],
                         "value": _r(values.get(year, {}).get(k)),
-                        "farm_average": _r(sum(others) / len(others)) if others else None,
+                        "farm_average": _r(_mean(others)),
                         "seasons_averaged": len(others)})
     return {"season": year, "weather_on_file_from": first.date().isoformat(),
             "weather_on_file_to": last.date().isoformat(), "factors": factors, "months": months}
@@ -209,14 +214,6 @@ def picking_pace(year: int, block_id: Optional[str] = None) -> dict:
 # --------------------------------------------------------------------------- #
 # The Boord Notes bridge
 # --------------------------------------------------------------------------- #
-def _post_json(url: str, body: dict, timeout: float) -> dict:
-    """Split out so tests can stand in for Notes."""
-    req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read())
-
-
 def notes_configured() -> bool:
     return bool(config.NOTES_URL)
 
@@ -224,14 +221,16 @@ def notes_configured() -> bool:
 def farm_notes(question: str) -> dict:
     """Boord Notes' own Ask: its answer, written from the notes only, and
     the notes it used (title and date; a link when NOTES_PUBLIC_URL says
-    where phones open Notes). Raises RuntimeError in the owner's words."""
+    where phones open Notes). Raises ai.AIError in the owner's words - it
+    is one more provider failing, as far as the caller is concerned."""
     if not config.NOTES_URL:
-        raise RuntimeError("Boord Notes is not linked to this app (OWNER_NOTES_URL)")
+        raise ai.AIError("Boord Notes is not linked to this app (OWNER_NOTES_URL)")
     question = (question or "").strip()[:1000]
     if not question:
-        raise RuntimeError("Type a question for the notes first")
+        raise ai.AIError("Type a question for the notes first")
     try:
-        r = _post_json(f"{config.NOTES_URL}/api/ai/ask", {"question": question}, NOTES_TIMEOUT_S)
+        r = json.loads(b"".join(ai._post_stream(f"{config.NOTES_URL}/api/ai/ask", {"Content-Type": "application/json"},
+                                                {"question": question}, timeout=NOTES_TIMEOUT_S)))
     except urllib.error.HTTPError as e:
         raw = e.read() if e.fp else b""
         try:
@@ -239,10 +238,10 @@ def farm_notes(question: str) -> dict:
         except ValueError:
             detail = None
         if e.code == 503 and isinstance(detail, str):
-            raise RuntimeError(f"Boord Notes: {detail}") from None   # Notes' own sentence for Andre
-        raise RuntimeError(f"Boord Notes answered HTTP {e.code}") from None
+            raise ai.AIError(f"Boord Notes: {detail}") from None   # Notes' own sentence for Andre
+        raise ai.AIError(f"Boord Notes answered HTTP {e.code}") from None
     except (OSError, ValueError) as e:
-        raise RuntimeError(f"Boord Notes could not be reached on the farm server ({e})") from None
+        raise ai.AIError(f"Boord Notes could not be reached on the farm server ({e})") from None
     sources = [{"title": src.get("title") or "(untitled)", "date": str(src.get("created_at", ""))[:10],
                 **({"url": f"{config.NOTES_PUBLIC_URL}/app/"} if config.NOTES_PUBLIC_URL else {})}
                for src in r.get("sources") or []]
@@ -253,12 +252,7 @@ def farm_notes(question: str) -> dict:
 def run_tool(name: str, args: dict):
     """Dispatch for ai.stream_events. A bad name or argument raises; the
     model is told and carries on without it."""
-    if name == "block_history":
-        return block_history(str(args.get("block_id", "")))
-    if name == "season_weather":
-        return season_weather(int(args["year"]))
-    if name == "picking_pace":
-        return picking_pace(int(args["year"]), args.get("block_id"))
-    if name == "farm_notes":
-        return farm_notes(str(args.get("question", "")))
-    raise ValueError(f"unknown tool {name}")
+    tools = {t["name"]: t for t in TOOLS + [NOTES_TOOL]}
+    if name not in tools:
+        raise ValueError(f"unknown tool {name}")
+    return tools[name]["run"](args)

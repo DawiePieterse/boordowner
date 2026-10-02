@@ -51,10 +51,15 @@ from typing import Callable, Iterator, Optional
 
 import config
 
+# Each entry: the display name and default model; `prefer`/`avoid` (free
+# tiers, whose model names retire - see _switch_model; an entry without them
+# is never swapped); `sdk` for the provider called through its own SDK
+# (structured output, caching, tools); `key_env`/`key_file` for where a key
+# may come from besides OWNER_AI_API_KEY.
 PROVIDERS = {
     "anthropic": {
-        "name": "Anthropic Claude", "model": "claude-sonnet-5-5",
-        "prefer": [], "avoid": r"$^",   # ids are stable: never swapped
+        "name": "Anthropic Claude", "model": "claude-sonnet-5-5", "sdk": True,
+        "key_env": ["ANTHROPIC_API_KEY"], "key_file": True,
     },
     "gemini": {
         "name": "Google Gemini", "model": "gemini-3.8-flash",
@@ -99,13 +104,31 @@ class AIError(Exception):
 # --------------------------------------------------------------------------- #
 # Settings
 # --------------------------------------------------------------------------- #
-def _anthropic_key() -> str:
-    """OWNER_AI_API_KEY, else ANTHROPIC_API_KEY, else the key file - so the
-    key Boord Notes already has on this server can serve this app too."""
-    key = config.AI_API_KEY or os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not key and config.AI_KEY_FILE and os.path.exists(config.AI_KEY_FILE):
-        with open(config.AI_KEY_FILE, encoding="utf-8") as f:
-            key = f.read().strip()
+_key_file_cache = {"path": None, "mtime": None, "key": ""}
+
+
+def _read_key_file(path: str) -> str:
+    """The key file's contents, re-read only when the file changes -
+    settings() runs on every AI request and must not cost a disk read."""
+    try:
+        mtime = os.stat(path).st_mtime
+    except OSError:
+        return ""
+    if _key_file_cache["path"] != path or _key_file_cache["mtime"] != mtime:
+        with open(path, encoding="utf-8") as f:
+            _key_file_cache.update(path=path, mtime=mtime, key=f.read().strip())
+    return _key_file_cache["key"]
+
+
+def _api_key(provider: str) -> str:
+    """OWNER_AI_API_KEY, else the provider's own environment variable, else
+    its key file - so the key Boord Notes already has on this server can
+    serve this app too."""
+    p = PROVIDERS[provider]
+    key = config.AI_API_KEY or next((os.environ.get(v, "").strip() for v in p.get("key_env", [])
+                                     if os.environ.get(v, "").strip()), "")
+    if not key and p.get("key_file") and config.AI_KEY_FILE:
+        key = _read_key_file(config.AI_KEY_FILE)
     return key
 
 
@@ -114,10 +137,8 @@ def settings() -> Optional[dict]:
     (and, for custom, no endpoint). Read from config on every call so a
     test can switch it."""
     provider = config.AI_PROVIDER if config.AI_PROVIDER in PROVIDERS else "custom"
-    s = {"provider": provider, "api_key": config.AI_API_KEY,
+    s = {"provider": provider, "api_key": _api_key(provider),
          "endpoint": config.AI_ENDPOINT, "model": config.AI_MODEL}
-    if provider == "anthropic":
-        s["api_key"] = _anthropic_key()
     if provider == "custom":
         return s if s["endpoint"] else None
     return s if s["api_key"] else None
@@ -133,8 +154,15 @@ def model_for(s: dict) -> str:
 
 
 def has_tools(s: Optional[dict]) -> bool:
-    """Whether Ask can look things up for itself (tool use) - Claude only."""
-    return bool(s) and s["provider"] == "anthropic"
+    """Whether Ask can look things up for itself (tool use): the SDK providers."""
+    return bool(s) and bool(PROVIDERS[s["provider"]].get("sdk"))
+
+
+def _require(s: Optional[dict]) -> dict:
+    s = s or settings()
+    if not s:
+        raise AIError("No AI provider is set up on the farm server")
+    return s
 
 
 def remember_model(provider: str, model: Optional[str]) -> None:
@@ -255,8 +283,8 @@ def finish_reason(s: dict, j: dict) -> Optional[str]:
 
 
 # What a provider calls "ran out of room" and "won't answer this".
-_CUT_SHORT = {"MAX_TOKENS", "length"}
-_DECLINED = {"SAFETY", "RECITATION", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "content_filter"}
+_CUT_SHORT = {"MAX_TOKENS", "length", "max_tokens"}
+_DECLINED = {"SAFETY", "RECITATION", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "content_filter", "refusal"}
 
 
 def _check_finish(reason: Optional[str], name: str) -> None:
@@ -295,11 +323,11 @@ def _failure(status: int, raw: bytes, name: str) -> AIError:
     return AIError(f"{name}: {detail or f'HTTP {status}'}")
 
 
-def _post_stream(url: str, headers: dict, body: dict) -> Iterator[bytes]:
+def _post_stream(url: str, headers: dict, body: dict, timeout: float = TIMEOUT_S) -> Iterator[bytes]:
     """POSTs and yields the response's raw lines. A refusal raises
     urllib.error.HTTPError. Split out so tests can stand in for the network."""
     req = urllib.request.Request(url, data=_json.dumps(body).encode(), headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         for line in resp:
             yield line
 
@@ -344,7 +372,7 @@ def _sse(lines: Iterator[bytes]) -> Iterator[dict]:
 def _switch_model(s: dict, err: AIError) -> bool:
     """A free-tier model retired under us: pick its replacement, remember
     it, and say whether there is one to retry with."""
-    if s["model"] or s["provider"] == "anthropic" or not model_gone(str(err)):
+    if s["model"] or "prefer" not in PROVIDERS[s["provider"]] or not model_gone(str(err)):
         return False
     remember_model(s["provider"], None)
     nxt = suggested_model(str(err)) or pick_model(
@@ -357,18 +385,12 @@ def _switch_model(s: dict, err: AIError) -> bool:
 
 
 def stream(messages: list, s: Optional[dict] = None, _retried: bool = False) -> Iterator[str]:
-    """Asks the configured model and yields the answer's text as it arrives.
+    """The HTTP providers' streamed answer, as text as it arrives (the SDK
+    provider goes through _anthropic_events; stream_events dispatches).
     Raises AIError with an owner-readable message on any failure - after
     the text, when the answer was cut short or the provider stopped it
     part-way, so the browser can show what arrived with a note."""
-    s = s or settings()
-    if not s:
-        raise AIError("No AI provider is set up on the farm server")
-    if s["provider"] == "anthropic":
-        for ev in _anthropic_events(messages, s, tools=None, run_tool=None, effort="low"):
-            if "t" in ev:
-                yield ev["t"]
-        return
+    s = _require(s)
     name = provider_name(s)
     url, headers, body, delta = build_request(messages, s)
     try:
@@ -445,49 +467,37 @@ def _anthropic_client(s: dict):
     return _anthropic["client"]
 
 
-def _anthropic_messages(messages: list) -> tuple:
-    """Our (role, content) list -> the SDK's system blocks and messages.
-
-    Caching: the system prompt and the first user turn (the figures - the
-    bulk of every request) carry a cache breakpoint, so a follow-up within
-    five minutes re-reads them from cache. The figures must therefore be
-    byte-identical between a question and its follow-ups: routers/ai.py's
-    build_messages keeps them in the first turn, verbatim."""
-    system_text = "\n".join(m["content"] for m in messages if m["role"] == "system")
-    system = [{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}] if system_text else None
-    msgs = []
-    first_user = True
-    for m in messages:
-        if m["role"] == "system":
-            continue
-        content = m["content"]
-        if m["role"] == "user" and first_user and isinstance(content, str):
-            content = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
-            first_user = False
-        msgs.append({"role": m["role"], "content": content})
-    return system, msgs
-
-
-def _anthropic_errors():
-    """The SDK's typed errors, most specific first, each to a sentence for
-    the owner. Imported lazily: the SDK is only needed with this provider."""
-    import anthropic
-    return [
-        (anthropic.AuthenticationError, "Anthropic: the API key was rejected"),
-        (anthropic.RateLimitError, "Anthropic: busy right now, try again in a minute"),
-        (anthropic.APIConnectionError, "Anthropic could not be reached - check the server's internet connection"),
-        (anthropic.APIStatusError, None),   # message built from the status below
-    ]
+def _anthropic_kwargs(messages: list, s: dict, effort: str, **output_config) -> dict:
+    """One request's arguments. Caching: the system prompt and the first
+    user turn (the figures - the bulk of every request) carry a cache
+    breakpoint, so a follow-up within five minutes re-reads them from
+    cache. The figures must therefore be byte-identical between a question
+    and its follow-ups: routers/ai.py's build_messages keeps them in the
+    first turn, verbatim."""
+    msgs = [{"role": m["role"], "content": m["content"]} for m in messages if m["role"] != "system"]
+    if msgs:
+        msgs[0]["content"] = [{"type": "text", "text": msgs[0]["content"], "cache_control": {"type": "ephemeral"}}]
+    kw = dict(model=model_for(s), max_tokens=ANTHROPIC_MAX_TOKENS, messages=msgs,
+              output_config={"effort": effort, **output_config})
+    system = "\n".join(m["content"] for m in messages if m["role"] == "system")
+    if system:
+        kw["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+    return kw
 
 
 def _anthropic_fail(e: Exception) -> AIError:
-    for cls, msg in _anthropic_errors():
-        if isinstance(e, cls):
-            if msg is None:
-                print(f"[ai] Anthropic API error {getattr(e, 'status_code', '?')}: {e}", flush=True)
-                return AIError(f"Anthropic: the request failed (HTTP {getattr(e, 'status_code', '?')})")
-            return AIError(msg)
-    raise e
+    """The SDK's typed errors, most specific first, each as a sentence for
+    the owner. Imported here: the SDK is only needed with this provider."""
+    import anthropic
+    if isinstance(e, anthropic.AuthenticationError):
+        return AIError("Anthropic: the API key was rejected")
+    if isinstance(e, anthropic.RateLimitError):
+        return AIError("Anthropic: busy right now, try again in a minute")
+    if isinstance(e, anthropic.APIConnectionError):
+        return AIError("Anthropic could not be reached - check the server's internet connection")
+    status = getattr(e, "status_code", "?")
+    print(f"[ai] Anthropic API error {status}: {e}", flush=True)
+    return AIError(f"Anthropic: the request failed (HTTP {status})")
 
 
 def _log_usage(what: str, usage) -> None:
@@ -504,14 +514,13 @@ def _anthropic_events(messages: list, s: dict, tools: Optional[list], run_tool: 
     model continues - up to MAX_TOOL_ROUNDS times in one answer."""
     import anthropic
     client = _anthropic_client(s)
-    system, msgs = _anthropic_messages(messages)
-    kwargs = dict(model=model_for(s), max_tokens=ANTHROPIC_MAX_TOKENS, messages=msgs,
-                  output_config={"effort": effort})
-    if system:
-        kwargs["system"] = system
+    name = provider_name(s)
+    kwargs = _anthropic_kwargs(messages, s, effort)
+    by_name = {t["name"]: t for t in tools or []}
     if tools:
         kwargs["tools"] = [{"name": t["name"], "description": t["description"],
                             "input_schema": t["input_schema"]} for t in tools]
+    msgs = kwargs["messages"]
     for _round in range(MAX_TOOL_ROUNDS + 1):
         try:
             with client.messages.stream(**kwargs) as st:
@@ -521,10 +530,7 @@ def _anthropic_events(messages: list, s: dict, tools: Optional[list], run_tool: 
         except anthropic.APIError as e:
             raise _anthropic_fail(e) from None
         _log_usage("ask", final.usage)
-        if final.stop_reason == "refusal":
-            raise AIError("Anthropic Claude declined to answer this one")
-        if final.stop_reason == "max_tokens":
-            raise AIError("Anthropic Claude: the answer was cut short at its length limit - ask something narrower")
+        _check_finish(final.stop_reason, name)
         if final.stop_reason != "tool_use" or not run_tool:
             return
         # The whole assistant turn goes back as-is (thinking blocks included,
@@ -534,8 +540,7 @@ def _anthropic_events(messages: list, s: dict, tools: Optional[list], run_tool: 
         for block in final.content:
             if block.type != "tool_use":
                 continue
-            step = next((t.get("step") for t in tools if t["name"] == block.name), None)
-            yield {"step": step(block.input) if callable(step) else (step or f"Looking up {block.name}...")}
+            yield {"step": by_name[block.name]["step"](block.input)}
             try:
                 out = run_tool(block.name, dict(block.input))
                 results.append({"type": "tool_result", "tool_use_id": block.id,
@@ -545,32 +550,25 @@ def _anthropic_events(messages: list, s: dict, tools: Optional[list], run_tool: 
                 results.append({"type": "tool_result", "tool_use_id": block.id,
                                 "content": f"Error: {e}", "is_error": True})
         msgs.append({"role": "user", "content": results})
-    raise AIError("Anthropic Claude: too many lookups for one answer - ask something narrower")
+    raise AIError(f"{name}: too many lookups for one answer - ask something narrower")
 
 
 def _anthropic_json(messages: list, schema: dict, s: dict, effort: str) -> dict:
     import anthropic
     client = _anthropic_client(s)
-    system, msgs = _anthropic_messages(messages)
-    kwargs = dict(model=model_for(s), max_tokens=ANTHROPIC_MAX_TOKENS, messages=msgs,
-                  output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}})
-    if system:
-        kwargs["system"] = system
+    kwargs = _anthropic_kwargs(messages, s, effort, format={"type": "json_schema", "schema": schema})
     try:
         # One retry here: nothing is streaming, and a review is worth a second go.
         response = client.with_options(max_retries=1).messages.create(**kwargs)
     except anthropic.APIError as e:
         raise _anthropic_fail(e) from None
     _log_usage("json", response.usage)
-    if response.stop_reason == "refusal":
-        raise AIError("Anthropic Claude declined to answer this one")
-    if response.stop_reason == "max_tokens":
-        raise AIError("Anthropic Claude: the answer was cut short at its length limit")
+    _check_finish(response.stop_reason, provider_name(s))
     text = next((b.text for b in response.content if b.type == "text"), "")
     try:
         return _json.loads(text)
     except ValueError:
-        raise AIError("Anthropic Claude: the reply could not be read - try again") from None
+        raise AIError(f"{provider_name(s)}: the reply could not be read - try again") from None
 
 
 # --------------------------------------------------------------------------- #
@@ -582,11 +580,9 @@ def stream_events(messages: list, s: Optional[dict] = None, tools: Optional[list
     model looks something up (Claude only - the other providers answer from
     the figures sent and never see `tools`). Counts one call against the
     daily cap. Raises AIError, possibly after some text."""
-    s = s or settings()
-    if not s:
-        raise AIError("No AI provider is set up on the farm server")
+    s = _require(s)
     spend_call()
-    if s["provider"] == "anthropic":
+    if PROVIDERS[s["provider"]].get("sdk"):
         yield from _anthropic_events(messages, s, tools, run_tool, effort)
         return
     for text in stream(messages, s):
@@ -602,11 +598,9 @@ def complete_json(messages: list, schema: dict, s: Optional[dict] = None, effort
     """One answer shaped by `schema`: constrained server-side with Claude;
     JSON mode plus the schema in the prompt with the others, so the caller
     still checks what came back (routers/ai.py does, block by block)."""
-    s = s or settings()
-    if not s:
-        raise AIError("No AI provider is set up on the farm server")
+    s = _require(s)
     spend_call()
-    if s["provider"] == "anthropic":
+    if PROVIDERS[s["provider"]].get("sdk"):
         return _anthropic_json(messages, schema, s, effort)
     # The schema goes into the last user turn: the free-tier JSON modes
     # take a MIME type or {"type": "json_object"}, not a schema.

@@ -107,47 +107,31 @@ def on_startup():
     with boord_engine.connect() as conn:
         _assert_boord_schema(conn)
     init_owner_db()
-    _start_forecast_snapshots()
-    _start_daily_brief()
+    # Records the Harvest Forecast's Expected kg for the Risk tab's
+    # last-7-days trend (routers/risk.py), and writes the Dashboard's season
+    # brief once a day (routers/ai.py write_brief_if_due).
+    _start_periodic("forecast-snapshot", risk.snapshot_expected_forecast, config.FORECAST_SNAPSHOT_HOURS, 60)
+    _start_periodic("brief", ai.write_brief_if_due, config.BRIEF_HOURS, 120)
 
 
-def _forecast_snapshot_loop() -> None:
-    """Records the Harvest Forecast's Expected kg every
-    config.FORECAST_SNAPSHOT_HOURS, for the Risk tab's last-7-days trend.
-    A failed run (Open-Meteo down, Boord mid-migration) is logged and
-    retried next cycle; it never stops the loop or the app."""
-    time.sleep(60)   # let startup finish and the first requests through
-    while True:
-        try:
-            risk.snapshot_expected_forecast()
-        except Exception as e:  # noqa: BLE001 - see docstring
-            print(f"[forecast-snapshot] skipped: {e}", flush=True)
-        time.sleep(config.FORECAST_SNAPSHOT_HOURS * 3600)
+def _start_periodic(tag: str, fn, hours: float, first_delay_s: int) -> None:
+    """A background job on a daemon thread: `fn` every `hours`, after a
+    first delay that lets startup and the first requests through. A failed
+    run (Open-Meteo down, Boord mid-migration, the AI provider off) is
+    logged and retried next cycle; it never stops the loop or the app.
+    `hours` <= 0 = no job (tests)."""
+    if hours <= 0:
+        return
 
-
-def _start_forecast_snapshots() -> None:
-    if config.FORECAST_SNAPSHOT_HOURS > 0:
-        threading.Thread(target=_forecast_snapshot_loop, name="forecast-snapshots",
-                         daemon=True).start()
-
-
-def _daily_brief_loop() -> None:
-    """Writes the Dashboard's season brief once a day (routers/ai.py
-    write_brief_if_due) - checked every config.BRIEF_HOURS, so a server
-    that was off overnight writes it on the next check rather than
-    waiting for tomorrow. Nothing to do when no AI provider is set up."""
-    time.sleep(120)   # after the forecast snapshot's first run, and the first requests
-    while True:
-        try:
-            ai.write_brief_if_due()
-        except Exception as e:  # noqa: BLE001 - logged and retried next cycle
-            print(f"[brief] skipped: {e}", flush=True)
-        time.sleep(config.BRIEF_HOURS * 3600)
-
-
-def _start_daily_brief() -> None:
-    if config.BRIEF_HOURS > 0:
-        threading.Thread(target=_daily_brief_loop, name="daily-brief", daemon=True).start()
+    def loop() -> None:
+        time.sleep(first_delay_s)
+        while True:
+            try:
+                fn()
+            except Exception as e:  # noqa: BLE001 - see docstring
+                print(f"[{tag}] skipped: {e}", flush=True)
+            time.sleep(hours * 3600)
+    threading.Thread(target=loop, name=tag, daemon=True).start()
 
 
 class NoCacheStaticFiles(StaticFiles):

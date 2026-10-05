@@ -1,4 +1,4 @@
-"""Ask about this weather: the summary the model is given for the Weather tab.
+"""Ask AI about this weather: the summary the model is given for the Weather tab.
 
 The Estimate tab's Ask (routers/ai.py) is the template: the server works the
 figures out, the model only explains them. Here the figures are the farm's

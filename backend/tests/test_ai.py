@@ -258,7 +258,7 @@ def test_ask_validates_like_a_save(client, gemini):
 
 
 # --------------------------------------------------------------------------- #
-# Ask about this weather (the Weather tab)
+# Ask AI about this weather (the Weather tab)
 # --------------------------------------------------------------------------- #
 def _seed_weather(years=(2023, 2024, 2025, 2026)):
     """Noon and midnight on 1 and 2 July of each year (rain on the 2nd), at

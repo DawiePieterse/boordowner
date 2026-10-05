@@ -61,7 +61,7 @@ backend/
                      weather only, never fetches)
     ai.py            /api/ai/{status,ask}: Ask about this estimate - builds the
                      summary, releases Boord, streams the model's answer (NDJSON);
-                     `tab: "weather"` is Ask about this weather (ai_weather.py)
+                     `tab: "weather"` is Ask AI about this weather (ai_weather.py)
     ai_weather.py    the Weather tab's summary: ticked years and measurements, the
                      record year by year, the last 7 days, the farm's forecast
     historical.py    /api/historical-*/import
@@ -268,7 +268,7 @@ only, with the key on the server instead of in each browser.
 - Boord's database is read and closed before the provider is called
   (`tests/test_ai.py` asserts it), like every other outbound call here.
 
-### Ask about this weather
+### Ask AI about this weather
 
 The same question box under the Weather tab's chart (`tab: "weather"` on
 `/api/ai/ask`; same key, same provider, nothing more to set up). The summary

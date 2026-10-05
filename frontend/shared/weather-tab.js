@@ -71,12 +71,12 @@ const LWWeatherTab = (() => {
 
     LWCharts.bindPdfButtons(document.getElementById("tab-weather"));
 
-    // Ask about this weather: the question is answered by the farm server
+    // Ask AI about this weather: the question is answered by the farm server
     // from the years and measurements ticked here, the record behind them
     // and the forecast for the farm's location (routers/ai_weather.py).
     _ask = LWAsk.create({
       el: document.getElementById("weatherAsk"),
-      title: "Ask about this weather",
+      title: "Ask AI about this weather",
       placeholder: "e.g. How does this year compare with other years?",
       context: _askContext,
       questions: _askQuestions,

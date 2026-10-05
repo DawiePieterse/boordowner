@@ -191,7 +191,7 @@ long line across four decades. Untick everything and the chart tells you
 so instead of going blank. This chart downloads as a PDF the same way as
 the Analysis ones.
 
-### Ask about this weather
+### Ask AI about this weather
 
 Under the chart is a question box. Tap a suggestion — **How does 2025
 compare with the record average?**, **What does the forecast look like this

@@ -179,7 +179,65 @@ function refreshActiveTab() {
   return refreshDashboard();
 }
 
+// ---------------------------------------------------------------------
+// The season brief: a paragraph the AI model writes once a day from the
+// Estimate tab's figures (backend/routers/ai.py build_brief). Shown from
+// the server's copy; Refresh writes today's again on demand.
+// ---------------------------------------------------------------------
+const BRIEF_CACHE_KEY = "boord_cached_brief";
+
+function renderBrief(b, { configured = true, cachedAt = null } = {}) {
+  const card = document.getElementById("dashBrief");
+  if (!b && !configured) { card.classList.add("hidden"); return; }
+  card.classList.remove("hidden");
+  const text = document.getElementById("dashBriefText");
+  const meta = document.getElementById("dashBriefMeta");
+  if (!b) {
+    text.innerHTML = `<span class="text-slate-500">No brief yet - it is written each morning once an estimate for the season exists, or tap Refresh.</span>`;
+    meta.textContent = "";
+    return;
+  }
+  text.textContent = b.text;
+  const when = b.today ? "today" : `from ${new Date(`${b.date}T12:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short" })}`;
+  meta.textContent = `Written ${when}${cachedAt ? " (saved on this device)" : ""} · ${b.model || b.provider} · can be wrong, check the tabs`;
+}
+
+// The server's copy, through the same saved-copy envelope every tab uses
+// (Boord.cachedLoad): shown from the device when the server can't be reached.
+function showCachedBrief() {
+  const saved = Boord.getCachedJSON(BRIEF_CACHE_KEY);
+  if (saved && saved.data) renderBrief(saved.data.brief, { configured: saved.data.configured, cachedAt: saved.at });
+}
+
+async function loadBrief() {
+  let r;
+  try {
+    r = await Boord.cachedLoad(BRIEF_CACHE_KEY, () => Boord.api("/api/ai/brief", { timeoutMs: 15000 }));
+  } catch (e) {
+    return;   // nothing saved either; api() has already flagged a lost connection
+  }
+  renderBrief(r.data.brief, { configured: r.data.configured, cachedAt: r.cached ? r.at : null });
+}
+
+async function refreshBrief() {
+  const btn = document.getElementById("dashBriefRefresh");
+  btn.disabled = true;
+  btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Writing...`;
+  try {
+    const r = await Boord.cachedLoad(BRIEF_CACHE_KEY, async () =>
+      ({ ...(await Boord.api("/api/ai/brief/refresh", { method: "POST", timeoutMs: 120000 })), configured: true }));
+    renderBrief(r.data.brief, { configured: true, cachedAt: r.cached ? r.at : null });
+  } catch (e) {
+    console.error("Brief refresh failed:", e);
+    Boord.toast(typeof e.detail === "string" && e.detail ? e.detail : "Could not write the brief");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Refresh";
+  }
+}
+
 function bindDashboard() {
+  document.getElementById("dashBriefRefresh").addEventListener("click", refreshBrief);
   const today = Boord.localDateStr();
   document.getElementById("dashStart").value = today;
   document.getElementById("dashEnd").value = today;
@@ -482,6 +540,7 @@ function init() {
   activateTab("dashboard");
 
   // Show the last figures this device saw before touching the network.
+  showCachedBrief();
   const cachedDash = findCachedDashboard(currentQuery());
   if (cachedDash && renderCachedDashboard(currentQuery())) {
     setOfflineBannerText(`Offline - showing figures from ${describeAge(cachedDash.at)}`);
@@ -503,7 +562,7 @@ async function refreshAppData() {
     } catch (e) { /* the cached copy stands; api() flags a lost connection */ }
   })();
   updateBannerWeather();
-  await Promise.all([settings, loadSuppliers(), refreshDashboard()]);
+  await Promise.all([settings, loadSuppliers(), refreshDashboard(), loadBrief()]);
 }
 
 if ("serviceWorker" in navigator) {

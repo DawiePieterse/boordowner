@@ -189,15 +189,32 @@ try {
         $aiLines = (Get-Content $LauncherPath | Where-Object { $_ -match '^set "OWNER_AI_' }) -join "`r`n"
     }
     $aiBlank = if ($aiLines) { "blank to keep the current one" } else { "blank to skip" }
-    $aiKey = Read-Host "Gemini key from aistudio.google.com/apikey, or a Groq key ($aiBlank)"
+    $aiKey = Read-Host "Anthropic key from console.anthropic.com, a Gemini key from aistudio.google.com/apikey, or a Groq key ($aiBlank)"
     if ($aiKey) {
-        $aiProvider = (Read-Host "Provider: gemini or groq (blank for gemini)").Trim().ToLower()
+        $aiProvider = (Read-Host "Provider: anthropic, gemini or groq (blank for gemini)").Trim().ToLower()
         if (-not $aiProvider) { $aiProvider = "gemini" }
-        if ($aiProvider -notin @("gemini", "groq")) {
+        if ($aiProvider -notin @("anthropic", "gemini", "groq")) {
             Write-Warn "Unknown provider '$aiProvider' - using gemini. For another endpoint see README."
             $aiProvider = "gemini"
         }
         $aiLines = "set ""OWNER_AI_PROVIDER=$aiProvider""`r`nset ""OWNER_AI_API_KEY=$aiKey"""
+    }
+
+    # --- Step 3d: Boord Notes (optional) ---
+    # With Notes' local address, Ask can consult the farm notes (README "Ask
+    # the farm notes"). Notes binds 127.0.0.1:8020 on this same PC when it is
+    # installed here; blank keeps what the launcher has, or leaves it off.
+    Write-Step "Ask the farm notes - Boord Notes on this PC (optional)..."
+    $notesLines = ""
+    if (Test-Path $LauncherPath) {
+        $notesLines = (Get-Content $LauncherPath | Where-Object { $_ -match '^set "OWNER_NOTES_' }) -join "`r`n"
+    }
+    $notesBlank = if ($notesLines) { "blank to keep the current one" } else { "blank to skip" }
+    $notesUrl = (Read-Host "Boord Notes' local address, e.g. http://127.0.0.1:8020 ($notesBlank)").Trim().TrimEnd("/")
+    if ($notesUrl) {
+        $notesLines = "set ""OWNER_NOTES_URL=$notesUrl"""
+        $notesPublic = (Read-Host "The address phones open Notes at, e.g. https://<machine>.<tailnet>.ts.net:9443 (blank for no links)").Trim().TrimEnd("/")
+        if ($notesPublic) { $notesLines += "`r`nset ""OWNER_NOTES_PUBLIC_URL=$notesPublic""" }
     }
 
     # --- Step 4: Virtual environment ---
@@ -245,6 +262,7 @@ cd /d "$BackendDir"
 set "BOORD_DB_PATH=$boordDb"
 $iweatharLine
 $aiLines
+$notesLines
 "$venvPython" -m uvicorn main:app --host 127.0.0.1 --port $Port
 "@
     Set-Content -Path $LauncherPath -Value $launcher -Encoding ASCII

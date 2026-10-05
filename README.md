@@ -27,7 +27,7 @@ pack-out mix turned into kg and cartons per channel (estimation only — no
 pallets, transport or markets), the Risk tab's weather-driven Harvest
 Forecast as a cross-check (snapshotted with each saved version), and the
 past seasons whose weather so far came closest, and — when an AI key is
-set on the server — **Ask about this estimate** (see below). With no sign-in, anyone
+set on the server — **Ask AI about this estimate** (see below). With no sign-in, anyone
 who can reach the app can edit it — see **Access** below. Boord's setup
 and detail screens are not here — those live in Boord and were never part
 of this app.
@@ -37,9 +37,13 @@ of this app.
 ```
 backend/
   main.py            FastAPI app: startup checks, router registration, static mount
-  config.py          paths + env (OWNER_DB_PATH, BOORD_DB_PATH, OWNER_PORT, OWNER_AI_*)
-  ai.py              the AI provider for Ask: Gemini / Groq / OpenAI-compatible,
-                     streamed, retired-model fallback (no database access)
+  config.py          paths + env (OWNER_DB_PATH, BOORD_DB_PATH, OWNER_PORT, OWNER_AI_*,
+                     OWNER_NOTES_URL)
+  ai.py              the AI provider: Anthropic Claude (SDK, JSON schemas, caching,
+                     tool use) or Gemini / Groq / OpenAI-compatible (streamed,
+                     retired-model fallback); daily cap (no database access)
+  ai_tools.py        what Ask may look up for itself: a block's record, a season's
+                     weather, the picking pace, and Boord Notes (the bridge)
   db.py              two engines: owner.db (read-write) + boord.db (read-only, PRAGMA query_only)
   models_owner.py    WeatherHistory, HistoricalHarvest, HistoricalAnnualYield,
                      YieldEstimate + YieldEstimateBlock + YieldEstimatePack
@@ -59,14 +63,17 @@ backend/
     estimate.py      /api/estimate (GET view, POST/PUT/DELETE versions, /{id}/export XLSX)
     analogs.py       /api/estimate/analogs (similar past seasons; reads owner.db
                      weather only, never fetches)
-    ai.py            /api/ai/{status,ask}: Ask about this estimate - builds the
-                     summary, releases Boord, streams the model's answer (NDJSON);
-                     `tab: "weather"` is Ask AI about this weather (ai_weather.py)
+    ai.py            /api/ai/{status,ask,review,compare,brief,notes}: Ask about this
+                     estimate, Check before I save, What changed?, the daily brief,
+                     Ask the farm notes - each builds its figures, releases Boord,
+                     then calls the model (Ask and Compare stream NDJSON); `tab: "weather"` on
+                     ask is Ask AI about this weather (ai_weather.py)
     ai_weather.py    the Weather tab's summary: ticked years and measurements, the
                      record year by year, the last 7 days, the farm's forecast
     historical.py    /api/historical-*/import
     historical_report.py   /api/reports/historical-harvest-data (the XLSX workbook)
-  tests/             pytest: data endpoints, Boord isolation, ported risk-function tests
+  tests/             pytest: data endpoints, Boord isolation, ported risk-function tests,
+                     the AI provider plumbing and endpoints (no network)
 frontend/
   index.html         the five tabs
   owner.js           startup, tab routing, dashboard offline cache
@@ -233,12 +240,17 @@ the old mapping.
 | `FORECAST_SNAPSHOT_HOURS` | no | how often the background job records the forecast's Expected kg (default 6; 0 = off) |
 | `OWNER_DATA_DIR` | no | default `<repo>/data` |
 | `IWEATHAR_STATION_ID` | no | this farm's on-site iWeathar station id (e.g. `2235` for iWeathar Station Bekfontein), if it has one - unset means Open-Meteo only, the old behaviour |
-| `OWNER_AI_PROVIDER` | no | `gemini` (default), `groq` or `custom` - see **Ask about this estimate** |
-| `OWNER_AI_API_KEY` | no | the provider's API key; unset = Ask is off (the card says how to set it up) |
+| `OWNER_AI_PROVIDER` | no | `anthropic`, `gemini` (default), `groq` or `custom` - see **Ask AI about this estimate** |
+| `OWNER_AI_API_KEY` | no | the provider's API key; unset = the AI features are off (the card says how to set it up). For `anthropic`, `ANTHROPIC_API_KEY` or `OWNER_AI_KEY_FILE` also count |
+| `OWNER_AI_KEY_FILE` | anthropic only | a file holding the key alone on one line, default `data/anthropic_key.txt`; point it at Boord Notes' `data\anthropic_key.txt` to share that key |
 | `OWNER_AI_ENDPOINT` | custom only | an OpenAI-compatible `.../chat/completions` URL |
-| `OWNER_AI_MODEL` | no | blank = the provider's default, swapped automatically when the provider retires it; a model set here is never swapped |
+| `OWNER_AI_MODEL` | no | blank = the provider's default (`claude-sonnet-5-5` for anthropic; `claude-opus-5-5` is stronger at about twice the price), swapped automatically when a free-tier provider retires it; a model set here is never swapped |
+| `OWNER_AI_DAILY_LIMIT` | no | AI calls per day across every feature (default 200); no sign-in, so this caps what a stray device could spend |
+| `OWNER_NOTES_URL` | no | Boord Notes' local address, e.g. `http://127.0.0.1:8020`; set = Ask can consult the farm notes - see **Ask the farm notes** |
+| `OWNER_NOTES_PUBLIC_URL` | no | where phones open Notes (e.g. `https://<server>.<tailnet>.ts.net:9443`), for the links under a notes answer |
+| `OWNER_BRIEF_HOURS` | no | how often the background job checks whether today's season brief is written (default 6; 0 = off) |
 
-### Ask about this estimate
+### Ask AI about this estimate
 
 A question box on the Estimate tab: "Review this estimate", "Which blocks look
 out of line with their history?", "Are we on track?", or anything typed. The
@@ -249,24 +261,84 @@ sends them with the question to an AI model and streams the answer back. The
 same design as the Weather Compare app's "Ask about this comparison", cloud
 only, with the key on the server instead of in each browser.
 
-- **Off until a key is set.** Get a free key (Gemini: aistudio.google.com/apikey;
-  Groq: console.groq.com/keys), re-run the installer and enter it at the Ask
-  step, or add `set "OWNER_AI_API_KEY=..."` (and `OWNER_AI_PROVIDER` for Groq) to
-  `start_owner_server.bat` and restart the task. The key sits in that launcher in
-  plain text, readable by the server's administrators - it is not committed.
+- **Off until a key is set.** Either a free key (Gemini: aistudio.google.com/apikey;
+  Groq: console.groq.com/keys) or an Anthropic key (console.anthropic.com -
+  paid, a few cents a question, and the one that unlocks everything below).
+  Re-run the installer and enter it at the Ask step, or add
+  `set "OWNER_AI_API_KEY=..."` and `set "OWNER_AI_PROVIDER=anthropic"` (or
+  `groq`) to `start_owner_server.bat` and restart the task. The key sits in
+  that launcher in plain text, readable by the server's administrators - it is
+  not committed. With `anthropic`, the key Boord Notes already has on this
+  server can be shared: `set "OWNER_AI_KEY_FILE=C:\boord-notes\data\anthropic_key.txt"`.
 - **What leaves the farm.** Each question sends the summary to the provider:
   block kg and kg/tree, the owner's estimate, notes and pack-out mix, farm
   totals. Not worker, supplier or lot data, and never the key to a browser.
-  The card says so under the question box.
+  The card says so under the question box. With Claude, a lookup the model
+  asks for (below) sends that block's or season's record too, and a notes
+  question sends Notes' answer.
 - **It only reads.** Answers are never written into an estimate; the owner can
   copy one or add it to the version's notes and save.
 - **Unsaved edits count.** The browser sends its working copy and the
   weather-model figures it is showing, so a review covers what is on screen.
 - **Guard rails.** The prompt holds the model to the figures sent; an answer
   that echoes JSON is asked again in words; one that names a season or block
-  not in the summary gets a "check this against the table" note.
+  not in the summary gets a "check this against the table" note; an answer
+  the provider cut off at its length limit, or declined, says so after
+  whatever text arrived rather than passing as whole.
+- **The daily cap.** `OWNER_AI_DAILY_LIMIT` calls a day across every feature
+  here, in memory (resets at midnight and on restart); the panel shows the
+  count. Same design as Boord Notes.
 - Boord's database is read and closed before the provider is called
-  (`tests/test_ai.py` asserts it), like every other outbound call here.
+  (`tests/test_ai.py` asserts it), like every other outbound call here. A
+  lookup the model asks for opens and closes its own sessions inside the
+  tool (`tests/test_ai_claude.py` asserts that too).
+
+**Check before I save** (button next to Save). The same summary, but the
+model answers in a fixed shape (`REVIEW_SCHEMA`): for every block a flag
+(high / medium / low / ok), the reason in a sentence, and the kg/tree range
+the block's own history supports; then the whole-farm points. The server
+checks every block id against the estimate before anything is shown, drops
+the rest and says so, and the tab puts a badge on each block's row (the
+finding is its tooltip) with the findings in a card. Flags only - nothing is
+written to a figure. With Claude the shape is enforced by the API; with the
+free-tier providers it is JSON mode plus the schema in the prompt, and the
+same server-side check.
+
+**What changed?** (next to the Version selector, once a season has two
+versions). Sends the two versions with the per-block deltas worked out
+(`build_compare_summary`) and asks what moved and why it matters; the answer
+lands in the Ask panel and follow-ups carry on from it.
+
+**Today's season brief** (Dashboard). Once a day, the background job in
+`main.py` has the model write one short paragraph from the current season's
+latest version - picking pace against the estimate, how the weather model's
+Expected kg moved over the last days, a block or two worth walking - and
+stores it in `owner.db` (`SeasonBrief`), so the Dashboard shows it instantly
+and offline. Refresh writes today's again. It is written against an estimate:
+with none for the season, nothing is written and nothing is spent.
+
+**With Claude only.** Answers are shaped by JSON schemas where the app needs
+them; the system prompt and the figures carry prompt-cache breakpoints, so a
+follow-up within five minutes re-reads them at a tenth of the price (the
+server log's `[ai] ask: ... cached=` line shows it); and Ask can look things
+up for itself (`ai_tools.py`): a block's full season record, a season's
+weather (the four model factors and a month-by-month summary), how a
+season's picking ran, and the farm notes. The panel says what is being looked
+up while it waits. The model is told to compare the summary first and look up
+only what the question needs; at most six lookups per answer.
+
+### Ask the farm notes
+
+Boord Notes (the farm's notebook app) runs beside this one. With
+`OWNER_NOTES_URL` set to its local address, the Estimate tab's panel gets an
+"Ask the farm notes instead" toggle that sends the question to Notes' own
+Ask (`/api/ai/ask` on Notes, over localhost) and lists the notes it used
+under the answer - and, with Claude, the notes become a lookup Ask can make
+on its own ("what do the farm notes say about the blocks that look out of
+line?"). The two apps still share no data: this is one app asking the other
+a question, and Notes answers from its notes with its own key and its own
+daily cap. Notes' setup message ("AI help is not set up on the server yet")
+comes through as-is when it has no key.
 
 ### Ask AI about this weather
 

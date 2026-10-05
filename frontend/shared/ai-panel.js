@@ -12,8 +12,18 @@
 //   actions     -> extra buttons under an answer, e.g. "Add to notes"
 //   privacy     -> (provider) => the line saying what asking sends away
 //   followUps   -> the follow-up chips under an answer (default FOLLOW_UPS)
+//   notesQuestions() -> chips for "Ask the farm notes" mode (optional)
+//   onStatus(s) -> called with /api/ai/status whenever the panel (re)loads
+//                  it, so the tab can show its own AI buttons from the one copy
 // It never writes anything itself - an answer is only read, copied, or
 // handed to an action the owner presses.
+//
+// askWith({endpoint, body, key, question, shownAs}) sends the same panel
+// somewhere else on the server with its own body - the Estimate tab's
+// "What changed?" (/api/ai/compare) - and follow-ups carry on from there.
+// With Boord Notes linked (status.notes), a toggle under the box sends the
+// question to Notes' own Ask (/api/ai/notes) instead, and the notes it
+// used are listed under the answer.
 const LWAsk = (() => {
   const FOLLOW_UPS = ["Why?", "Say that in fewer words", "Break that down by block", "Show the numbers behind that"];
   const PROSE_REMINDER = "Please answer in plain prose or a short bullet list, not JSON or code.";
@@ -106,12 +116,13 @@ const LWAsk = (() => {
   }
 
   function create({ el, title = "Ask about this", context, questions, actions = [], placeholder = "",
-                   privacy = null, followUps = FOLLOW_UPS }) {
+                    notesQuestions = null, onStatus = null, privacy = null, followUps = FOLLOW_UPS }) {
     let _history = [];         // [{q, a}] about the current key
     let _key = null;
     let _controller = null;
     let _answer = "";
     let _chipSig = "";
+    let _route = null;         // the route an askWith() set; follow-ups keep it, a new question clears it
 
     el.innerHTML = `
       <div class="flex flex-wrap items-center justify-between gap-2">
@@ -126,8 +137,10 @@ const LWAsk = (() => {
           <button type="submit" data-ask="go" class="px-3 py-2 bg-slate-200 rounded-lg text-sm">Ask</button>
           <button type="button" data-ask="stop" class="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm hidden">Stop</button>
         </form>
+        <label data-ask="notesWrap" class="text-xs text-slate-500 hidden"><input type="checkbox" data-ask="notesMode"> Ask the farm notes instead (Boord Notes)</label>
         <div data-ask="status" class="text-xs text-slate-500"></div>
         <div data-ask="answer" class="ai-answer text-sm hidden"></div>
+        <div data-ask="sources" class="text-xs text-slate-500 hidden"></div>
         <div data-ask="note" class="text-xs text-amber-700"></div>
         <div data-ask="tools" class="flex flex-wrap gap-2 hidden"></div>
         <div data-ask="privacy" class="text-xs text-slate-400"></div>
@@ -147,8 +160,13 @@ const LWAsk = (() => {
       return `<button type="button" ${attr}="${esc(label)}" class="px-3 py-1 bg-slate-100 hover:bg-slate-200 rounded-full text-xs">${esc(label)}</button>`;
     }
 
+    function notesMode() {
+      return !!(part("notesMode").checked && !part("notesWrap").classList.contains("hidden"));
+    }
+
     function renderChips() {
-      const qs = (questions() || []).slice(0, 6);
+      const source = notesMode() && notesQuestions ? notesQuestions : questions;
+      const qs = (source() || []).slice(0, 6);
       const sig = qs.join("|");
       if (sig === _chipSig) return;
       _chipSig = sig;
@@ -171,31 +189,47 @@ const LWAsk = (() => {
     // once the status is known, and it retries after an offline start.
     async function refresh() {
       const s = await loadStatus();
+      if (onStatus) onStatus(s);
       if (!s) {
         part("setup").textContent = _status ? "" : "Can't reach the farm server to check whether Ask is set up.";
         part("setup").classList.toggle("hidden", !!_status);
         return;
       }
       if (!s.configured) {
-        part("setup").textContent = "Not set up on the farm server yet. Whoever looks after it can add a free Gemini or Groq key - see README, \"Ask about this estimate\".";
+        part("setup").textContent = "Not set up on the farm server yet. Whoever looks after it can add a free Gemini or Groq key - see README, \"Ask AI about this estimate\".";
         part("setup").classList.remove("hidden");
         part("body").classList.add("hidden");
         return;
       }
       part("setup").classList.add("hidden");
       part("body").classList.remove("hidden");
-      part("engine").textContent = s.provider;
+      part("engine").textContent = s.provider + (s.daily_limit ? ` · ${s.calls_today || 0}/${s.daily_limit} today` : "");
+      part("notesWrap").classList.toggle("hidden", !s.notes);
+      const lookups = s.tools ? ` It can also look up a block's full history, a season's weather and the picking record${s.notes ? ", and ask the farm notes" : ""}.` : "";
       part("privacy").textContent = privacy ? privacy(s.provider)
-        : `Asking sends this estimate's figures - block kg, your notes and the pack-out mix - from the farm server to ${s.provider}. Answers can be wrong: check them against the tables.`;
+        : `Asking sends this estimate's figures - block kg, your notes and the pack-out mix - from the farm server to ${s.provider}.${lookups} Answers can be wrong: check them against the tables.`;
       renderChips();
     }
 
-    async function ask(question, { retried = false, shownAs = null } = {}) {
+    // Where a new question goes: the notes when the toggle is on, else the
+    // estimate. `history` also says whether the answer is checked against
+    // the figures (and retried when it echoes them); `reading` is the
+    // spinner's word for what is being read.
+    function routeFor(question) {
+      if (notesMode()) return { endpoint: "/api/ai/notes", body: { question }, key: "notes", history: false, reading: "the notes" };
+      const ctx = context();
+      return ctx ? { endpoint: "/api/ai/ask", body: ctx.body, key: ctx.key, history: true, reading: "the figures" } : null;
+    }
+
+    // A typed or chip question is a new question and drops any askWith()
+    // route; a follow-up or retry passes the route it continues.
+    async function ask(question, { retried = false, shownAs = null, route = null } = {}) {
       question = (question || "").trim().slice(0, MAX_QUESTION);
       if (!question || _controller) return;
-      const ctx = context();
-      if (!ctx) return;
-      if (ctx.key !== _key) { _history = []; _key = ctx.key; }
+      if (!route) _route = null;
+      const r = route || routeFor(question);
+      if (!r) return;
+      if (r.key !== _key) { _history = []; _key = r.key; }
       const shown = shownAs || question;
 
       const controller = new AbortController();
@@ -208,16 +242,18 @@ const LWAsk = (() => {
       renderTools();
       part("note").textContent = "";
       part("answer").classList.remove("hidden");
-      part("answer").innerHTML = `<p class="text-slate-500"><i class="fa-solid fa-spinner fa-spin"></i> Reading the figures...</p>`;
+      part("sources").classList.add("hidden");
+      part("answer").innerHTML = `<p class="text-slate-500"><i class="fa-solid fa-spinner fa-spin"></i> Reading ${r.reading}...</p>`;
       part("status").textContent = `Q: ${shown}`;
 
       let text = "", done = null, error = null;
       try {
-        const res = await fetch("/api/ai/ask", {
+        const payload = { ...r.body, question: retried ? `${question}\n\n${PROSE_REMINDER}` : question };
+        if (r.history) payload.history = _history.slice(-3);
+        const res = await fetch(r.endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...ctx.body, question: retried ? `${question}\n\n${PROSE_REMINDER}` : question,
-                                 history: _history.slice(-3) }),
+          body: JSON.stringify(payload),
           signal: controller.signal,
         });
         clearTimeout(timer);
@@ -243,6 +279,11 @@ const LWAsk = (() => {
             if (msg.t) {
               text += msg.t;
               part("answer").innerHTML = renderMarkdown(text);
+            } else if (msg.step) {
+              // The model is looking something up (Claude's tools): say so
+              // where the answer will land, until the next piece arrives.
+              part("status").textContent = `Q: ${shown} · ${msg.step}`;
+              if (!text) part("answer").innerHTML = `<p class="text-slate-500"><i class="fa-solid fa-spinner fa-spin"></i> ${esc(msg.step)}</p>`;
             } else if (msg.error) {
               error = msg.error;
             } else if (msg.done) {
@@ -261,9 +302,9 @@ const LWAsk = (() => {
         setBusy(false);
       }
 
-      if (!error && text && !retried && checkAnswer(text, done).retry) {
+      if (!error && text && !retried && r.history && checkAnswer(text, done).retry) {
         // Small models sometimes echo the JSON back: ask once more, in words.
-        return ask(question, { retried: true, shownAs: shown });
+        return ask(question, { retried: true, shownAs: shown, route: r });
       }
       if (error && !text) {
         part("answer").innerHTML = `<p class="text-red-700">${esc(error)}</p>`;
@@ -278,11 +319,36 @@ const LWAsk = (() => {
       _history.push({ q: shown, a: text });
       const { note } = checkAnswer(text, done);
       part("note").textContent = [error, note].filter(Boolean).join(" ");
-      part("status").textContent = `Q: ${shown}${done && done.model ? ` · ${done.model}` : ""}`;
+      const by = done && (done.model || done.provider);
+      part("status").textContent = `Q: ${shown}${by ? ` · ${by}` : ""}`;
+      renderSources(done);
       renderTools();
     }
 
+    // The notes an answer from Boord Notes relied on (its own Ask lists
+    // them); a link when the server knows where phones open Notes.
+    function renderSources(done) {
+      const el = part("sources");
+      const srcs = (done && done.sources) || [];
+      if (!srcs.length) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+      const foot = done.notes_total != null ? ` Searched ${done.notes_considered < done.notes_total ? `the ${done.notes_considered} most relevant of ` : "all "}${done.notes_total} notes.` : "";
+      el.innerHTML = `From the farm notes: ` + srcs.map((x) => {
+        const label = `${esc(x.title)}${x.date ? ` (${esc(x.date)})` : ""}`;
+        return x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener" class="underline">${label}</a>` : label;
+      }).join("; ") + "." + foot;
+      el.classList.remove("hidden");
+    }
+
+    // Send the panel somewhere else on the server with its own body; the
+    // route stays for follow-ups until the owner asks about the estimate again.
+    function askWith({ endpoint, body, key, question, shownAs = null, reading = "the figures" }) {
+      _route = { endpoint, body, key, history: true, reading };
+      part("notesMode").checked = false;
+      return ask(question, { shownAs, route: _route });
+    }
+
     part("form").addEventListener("submit", (e) => { e.preventDefault(); ask(input.value); });
+    part("notesMode").addEventListener("change", () => { _chipSig = ""; renderChips(); });
     part("stop").addEventListener("click", () => { if (_controller) _controller.abort(); });
     part("chips").addEventListener("click", (e) => {
       const b = e.target.closest("[data-q]");
@@ -290,7 +356,7 @@ const LWAsk = (() => {
     });
     part("tools").addEventListener("click", async (e) => {
       const q = e.target.closest("[data-q]");
-      if (q) { ask(q.dataset.q); return; }
+      if (q) { ask(q.dataset.q, { route: _route }); return; }   // a follow-up stays on the same route
       const t = e.target.closest("[data-tool]");
       if (!t || !_answer) return;
       if (t.dataset.tool === "copy") {
@@ -307,7 +373,7 @@ const LWAsk = (() => {
     });
 
     refresh();
-    return { refresh, ask };
+    return { refresh, ask, askWith, status: loadStatus, element: el };
   }
 
   return { create, renderMarkdown, checkAnswer, plainText };

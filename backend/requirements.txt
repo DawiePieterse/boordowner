@@ -5,3 +5,4 @@ sqlmodel==0.0.22
 # for the two CSV imports, and FastAPI needs this to parse multipart bodies.
 python-multipart==0.0.20
 openpyxl==3.1.5
+anthropic==1.9.0

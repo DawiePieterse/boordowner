@@ -10,6 +10,8 @@
 //                  (a new key starts a new conversation)
 //   questions() -> the suggested-question chips for what is on screen
 //   actions     -> extra buttons under an answer, e.g. "Add to notes"
+//   privacy     -> (provider) => the line saying what asking sends away
+//   followUps   -> the follow-up chips under an answer (default FOLLOW_UPS)
 //   notesQuestions() -> chips for "Ask the farm notes" mode (optional)
 //   onStatus(s) -> called with /api/ai/status whenever the panel (re)loads
 //                  it, so the tab can show its own AI buttons from the one copy
@@ -101,17 +103,20 @@ const LWAsk = (() => {
       const years = new Set(check.years || []);
       const strays = [...new Set((text.match(/\b(?:19|20)\d\d\b/g) || []).map(Number))].filter((y) => !years.has(y));
       if (strays.length) notes.push(`Mentions ${strays.join(", ")}, which ${strays.length === 1 ? "isn't a season" : "aren't seasons"} on file`);
-      const blocks = new Set((check.blocks || []).map((b) => String(b).toLowerCase()));
-      const named = [...new Set([...text.matchAll(/\bblocks?\s+(\d[\w-]*)/gi)].map((m) => m[1].toLowerCase()))];
-      const unknown = named.filter((b) => !blocks.has(b));
-      if (unknown.length) notes.push(`names block ${unknown.join(", ")}, which isn't in this estimate`);
+      // Only a check that lists blocks (the Estimate tab's) can vouch for them.
+      if (check.blocks) {
+        const blocks = new Set(check.blocks.map((b) => String(b).toLowerCase()));
+        const named = [...new Set([...text.matchAll(/\bblocks?\s+(\d[\w-]*)/gi)].map((m) => m[1].toLowerCase()))];
+        const unknown = named.filter((b) => !blocks.has(b));
+        if (unknown.length) notes.push(`names block ${unknown.join(", ")}, which isn't in this estimate`);
+      }
     }
     const note = notes.length ? `${notes.join("; ")} - check this against the table.` : null;
     return { retry, note: note && note[0].toUpperCase() + note.slice(1) };
   }
 
   function create({ el, title = "Ask about this", context, questions, actions = [], placeholder = "",
-                    notesQuestions = null, onStatus = null }) {
+                    notesQuestions = null, onStatus = null, privacy = null, followUps = FOLLOW_UPS }) {
     let _history = [];         // [{q, a}] about the current key
     let _key = null;
     let _controller = null;
@@ -172,7 +177,7 @@ const LWAsk = (() => {
       const tools = part("tools");
       if (!_answer) { tools.classList.add("hidden"); tools.innerHTML = ""; return; }
       const own = actions.filter((a) => !a.show || a.show());
-      tools.innerHTML = FOLLOW_UPS.map((q) => chip(q, "data-q")).join("") +
+      tools.innerHTML = followUps.map((q) => chip(q, "data-q")).join("") +
         `<button type="button" data-tool="copy" class="px-3 py-1 bg-white border border-slate-300 rounded-full text-xs"><i class="fa-solid fa-copy"></i> Copy</button>` +
         own.map((a, i) => `<button type="button" data-tool="${i}" class="px-3 py-1 bg-white border border-slate-300 rounded-full text-xs">${a.icon ? `<i class="fa-solid ${a.icon}"></i> ` : ""}${esc(a.label)}</button>`).join("");
       tools._actions = own;
@@ -191,7 +196,7 @@ const LWAsk = (() => {
         return;
       }
       if (!s.configured) {
-        part("setup").textContent = "Not set up on the farm server yet. Whoever looks after it can add a free Gemini or Groq key - see README, \"Ask about this estimate\".";
+        part("setup").textContent = "Not set up on the farm server yet. Whoever looks after it can add a free Gemini or Groq key - see README, \"Ask AI about this estimate\".";
         part("setup").classList.remove("hidden");
         part("body").classList.add("hidden");
         return;
@@ -201,7 +206,8 @@ const LWAsk = (() => {
       part("engine").textContent = s.provider + (s.daily_limit ? ` · ${s.calls_today || 0}/${s.daily_limit} today` : "");
       part("notesWrap").classList.toggle("hidden", !s.notes);
       const lookups = s.tools ? ` It can also look up a block's full history, a season's weather and the picking record${s.notes ? ", and ask the farm notes" : ""}.` : "";
-      part("privacy").textContent = `Asking sends this estimate's figures - block kg, your notes and the pack-out mix - from the farm server to ${s.provider}.${lookups} Answers can be wrong: check them against the tables.`;
+      part("privacy").textContent = privacy ? privacy(s.provider)
+        : `Asking sends this estimate's figures - block kg, your notes and the pack-out mix - from the farm server to ${s.provider}.${lookups} Answers can be wrong: check them against the tables.`;
       renderChips();
     }
 

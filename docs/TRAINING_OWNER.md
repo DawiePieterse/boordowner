@@ -139,7 +139,7 @@ name and the chart's title.
 
 ---
 
-## Estimate tab: Ask about this estimate
+## Estimate tab: Ask AI about this estimate
 
 Near the top of the Estimate tab is a question box. Tap a suggestion -
 **Review this estimate**, **Which blocks look out of line with their
@@ -244,6 +244,22 @@ spring is running warmer or drier than usual, rather than reading one
 long line across four decades. Untick everything and the chart tells you
 so instead of going blank. This chart downloads as a PDF the same way as
 the Analysis ones.
+
+### Ask AI about this weather
+
+Under the chart is a question box. Tap a suggestion — **How does 2025
+compare with the record average?**, **What does the forecast look like this
+week?**, **Is there frost or heat in the forecast?** — or type your own, and
+an AI model answers in words from the figures behind the chart: the years and
+measurements you have ticked, every year on file for those measurements, the
+last 7 days, and the forecast for the farm's location. The current year is
+compared with the same stretch of other years (1 January to today), not with
+whole years. Change the ticks and it starts a fresh conversation.
+
+It can be wrong, and the forecast is a model's guess, least reliable past
+about three days. Asking sends these weather figures (not the GPS position)
+from the farm server to the AI provider. If the card says it's not set up,
+see "Ask AI about this estimate" above.
 
 ---
 

@@ -10,7 +10,7 @@
 //     to the estimate, reusing the Risk tab's saved figures where fresh;
 //   * similar past seasons - /api/estimate/analogs, loaded separately
 //     because it reads decades of weather;
-//   * Ask about this estimate (ai-panel.js) - questions in words, answered
+//   * Ask AI about this estimate (ai-panel.js) - questions in words, answered
 //     by the AI model set up on the farm server from these same figures,
 //     unsaved edits included; "What changed?" sends two versions through
 //     the same panel.
@@ -150,7 +150,7 @@ const LWEstimateTab = (() => {
 
     _ask = LWAsk.create({
       el: $("estAsk"),
-      title: "Ask about this estimate",
+      title: "Ask AI about this estimate",
       placeholder: "e.g. Which blocks look high against their history?",
       context: aiContext,
       questions: aiQuestions,

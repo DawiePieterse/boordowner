@@ -51,7 +51,7 @@ BOORD_STARTUP_WAIT_SECONDS = int(os.environ.get("BOORD_STARTUP_WAIT_SECONDS", "3
 
 FRONTEND_DIR = os.path.join(REPO_ROOT, "frontend")
 
-# Ask about this estimate: an AI model that explains the Estimate tab's
+# Ask AI about this estimate: an AI model that explains the Estimate tab's
 # figures in words (see ai.py, routers/ai.py). Off unless a key is set - the
 # app works exactly as before without it.
 #

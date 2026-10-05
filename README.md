@@ -27,7 +27,7 @@ pack-out mix turned into kg and cartons per channel (estimation only — no
 pallets, transport or markets), the Risk tab's weather-driven Harvest
 Forecast as a cross-check (snapshotted with each saved version), and the
 past seasons whose weather so far came closest, and — when an AI key is
-set on the server — **Ask about this estimate** (see below). With no sign-in, anyone
+set on the server — **Ask AI about this estimate** (see below). With no sign-in, anyone
 who can reach the app can edit it — see **Access** below. Boord's setup
 and detail screens are not here — those live in Boord and were never part
 of this app.
@@ -66,7 +66,10 @@ backend/
     ai.py            /api/ai/{status,ask,review,compare,brief,notes}: Ask about this
                      estimate, Check before I save, What changed?, the daily brief,
                      Ask the farm notes - each builds its figures, releases Boord,
-                     then calls the model (Ask and Compare stream NDJSON)
+                     then calls the model (Ask and Compare stream NDJSON); `tab: "weather"` on
+                     ask is Ask AI about this weather (ai_weather.py)
+    ai_weather.py    the Weather tab's summary: ticked years and measurements, the
+                     record year by year, the last 7 days, the farm's forecast
     historical.py    /api/historical-*/import
     historical_report.py   /api/reports/historical-harvest-data (the XLSX workbook)
   tests/             pytest: data endpoints, Boord isolation, ported risk-function tests,
@@ -237,7 +240,7 @@ the old mapping.
 | `FORECAST_SNAPSHOT_HOURS` | no | how often the background job records the forecast's Expected kg (default 6; 0 = off) |
 | `OWNER_DATA_DIR` | no | default `<repo>/data` |
 | `IWEATHAR_STATION_ID` | no | this farm's on-site iWeathar station id (e.g. `2235` for iWeathar Station Bekfontein), if it has one - unset means Open-Meteo only, the old behaviour |
-| `OWNER_AI_PROVIDER` | no | `anthropic`, `gemini` (default), `groq` or `custom` - see **Ask about this estimate** |
+| `OWNER_AI_PROVIDER` | no | `anthropic`, `gemini` (default), `groq` or `custom` - see **Ask AI about this estimate** |
 | `OWNER_AI_API_KEY` | no | the provider's API key; unset = the AI features are off (the card says how to set it up). For `anthropic`, `ANTHROPIC_API_KEY` or `OWNER_AI_KEY_FILE` also count |
 | `OWNER_AI_KEY_FILE` | anthropic only | a file holding the key alone on one line, default `data/anthropic_key.txt`; point it at Boord Notes' `data\anthropic_key.txt` to share that key |
 | `OWNER_AI_ENDPOINT` | custom only | an OpenAI-compatible `.../chat/completions` URL |
@@ -247,7 +250,7 @@ the old mapping.
 | `OWNER_NOTES_PUBLIC_URL` | no | where phones open Notes (e.g. `https://<server>.<tailnet>.ts.net:9443`), for the links under a notes answer |
 | `OWNER_BRIEF_HOURS` | no | how often the background job checks whether today's season brief is written (default 6; 0 = off) |
 
-### Ask about this estimate
+### Ask AI about this estimate
 
 A question box on the Estimate tab: "Review this estimate", "Which blocks look
 out of line with their history?", "Are we on track?", or anything typed. The
@@ -336,6 +339,23 @@ line?"). The two apps still share no data: this is one app asking the other
 a question, and Notes answers from its notes with its own key and its own
 daily cap. Notes' setup message ("AI help is not set up on the server yet")
 comes through as-is when it has no key.
+
+### Ask AI about this weather
+
+The same question box under the Weather tab's chart (`tab: "weather"` on
+`/api/ai/ask`; same key, same provider, nothing more to set up). The summary
+(`routers/ai_weather.py`) is for one location - the farm's GPS from Boord's
+Settings, which is also what the stored history was fetched for - and holds:
+the years and measurements ticked on the tab (per year: days on file, mean,
+lowest and highest day, totals for rain and sunshine, 12 monthly figures); every
+year on file for those measurements, so a year can be ranked against the record
+(the unfinished current year is compared over the same 1 Jan-to-date span);
+the last 7 days; the forecast for today and the next 7 days from Open-Meteo,
+with frost (night at or below 2 °C), heat (day at or above 35 °C) and rain-day
+highlights; and current conditions. With no GPS set there is no forecast. If
+the forecast service can't be reached the answer is built from the history
+alone. The coordinates are used to fetch the forecast but are not sent to the
+AI provider. It only reads; nothing is written.
 
 ## Updates
 

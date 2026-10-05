@@ -41,6 +41,7 @@ const LWWeatherTab = (() => {
   let _pointsByYear = {};
   let _fetchHistory = null;   // set by load(), reused when a new year is ticked
   let _loading = false;
+  let _ask = null;            // the LWAsk panel
 
   function bind() {
     // Same double-bind guard as analysis-tab.js: bind() is public and the
@@ -69,6 +70,44 @@ const LWWeatherTab = (() => {
     });
 
     LWCharts.bindPdfButtons(document.getElementById("tab-weather"));
+
+    // Ask AI about this weather: the question is answered by the farm server
+    // from the years and measurements ticked here, the record behind them
+    // and the forecast for the farm's location (routers/ai_weather.py).
+    _ask = LWAsk.create({
+      el: document.getElementById("weatherAsk"),
+      title: "Ask AI about this weather",
+      placeholder: "e.g. How does this year compare with other years?",
+      context: _askContext,
+      questions: _askQuestions,
+      followUps: ["Why?", "Say that in fewer words", "Compare with the record average", "Show the numbers behind that"],
+      privacy: (provider) => `Asking sends the weather figures shown here, the record behind them and the forecast for the farm's location (no coordinates) from the farm server to ${provider}. Answers can be wrong: check them against the chart.`,
+    });
+  }
+
+  // What /api/ai/ask is sent besides the question. The key names what is on
+  // screen, so ticking another year or measurement starts a fresh conversation.
+  function _askContext() {
+    if (!_data || !_selectedMetrics.size) return null;
+    const years = _data.years.filter((y) => _selectedYears.has(y));
+    const metrics = _data.metrics.map((m) => m.key).filter((k) => _selectedMetrics.has(k));
+    if (!years.length) return null;
+    return { body: { tab: "weather", years, metrics }, key: `weather:${years.join(",")}:${metrics.join(",")}` };
+  }
+
+  function _askQuestions() {
+    if (!_data) return [];
+    const years = _data.years.filter((y) => _selectedYears.has(y));
+    const labels = _data.metrics.filter((m) => _selectedMetrics.has(m.key)).map((m) => m.label.toLowerCase());
+    const what = labels.length ? labels.join(" and ") : "weather";
+    const thisYear = years.includes(_data.current_year);
+    const qs = [];
+    if (years.length > 1) qs.push(`Which of these years had the highest ${labels[0] || "reading"}?`);
+    else if (years.length === 1) qs.push(`How does ${years[0]} compare with the record average?`);
+    if (thisYear) qs.push("How does this year compare with the same period in other years?");
+    qs.push("What does the forecast look like this week?", "Is there frost or heat in the forecast?",
+            "How much rain has fallen in the last 7 days?", `Summarise the ${what} for me`);
+    return qs;
   }
 
   // Fetches whichever selected years are not in _pointsByYear yet, then
@@ -169,6 +208,7 @@ const LWWeatherTab = (() => {
       _selectedYears = new Set(data.years_returned);
     }
     _rebuildFilters(data);
+    if (_ask) _ask.refresh();
     const synced = document.getElementById("weatherLastSynced");
     synced.textContent = data.last_synced
       ? `Weather data current to ${_formatSynced(data.last_synced)}`

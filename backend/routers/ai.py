@@ -1,4 +1,4 @@
-"""Ask about this estimate: questions in plain words about the Estimate tab,
+"""Ask AI about this estimate: questions in plain words about the Estimate tab,
 answered by an AI model from the tab's own figures.
 
 The same shape as the Weather Compare app's "Ask about this comparison"
@@ -58,6 +58,8 @@ import ai_tools
 import config
 from db import boord_engine, owner_engine
 from models_owner import SeasonBrief, YieldEstimate, YieldEstimateBlock
+from routers.ai_weather import (MAX_METRICS, MAX_YEARS, WEATHER_SYSTEM_PROMPT, WEATHER_USER_TEMPLATE,
+                                build_weather_summary)
 from routers.analogs import build_analogs
 from routers.estimate import (EstimateForecastIn, EstimateLineIn, PackLineIn, _crosscheck,
                               _packout, _r, _utcnow, estimate_view)
@@ -187,6 +189,12 @@ class ReviewIn(BaseModel):
 
 
 class AskIn(ReviewIn):
+    tab: Literal["estimate", "weather"] = "estimate"
+    # The Weather tab: the calendar years and measurement keys ticked on it.
+    # Unknown ones are dropped by the summary rather than rejected - a stale
+    # tab is not a bad request (same rule as /api/weather/history).
+    years: List[int] = PydField(default_factory=list, max_length=MAX_YEARS * 4)
+    metrics: List[str] = PydField(default_factory=list, max_length=MAX_METRICS * 4)
     question: str = PydField(min_length=1, max_length=1000)
     history: List[TurnIn] = PydField(default_factory=list, max_length=20)
 
@@ -499,7 +507,7 @@ def _stream_response(gen):
 def _settings_or_503() -> dict:
     s = ai.settings()
     if not s:
-        raise HTTPException(503, "Ask isn't set up on the farm server (see README, Ask about this estimate)")
+        raise HTTPException(503, "Ask isn't set up on the farm server (see README, Ask AI about this estimate)")
     return s
 
 
@@ -513,8 +521,17 @@ def _summary_for(body: ReviewIn) -> dict:
 @router.post("/ask")
 def ask(body: AskIn):
     s = _settings_or_503()
-    summary = _summary_for(body)
     history = [t.model_dump() for t in body.history]
+    if body.tab == "weather":
+        # Boord is let go inside build_weather_summary before the forecast
+        # is fetched. No lookups: everything it may use is in the summary.
+        with Session(owner_engine) as owner, Session(boord_engine) as boord:
+            summary = build_weather_summary(owner, boord, body.years, body.metrics, date.today())
+        messages = build_messages(summary, body.question, history, system=WEATHER_SYSTEM_PROMPT,
+                                  template=WEATHER_USER_TEMPLATE)
+        events = ai.stream_events(messages, s, effort="low")
+        return _stream_response(_ndjson(events, summary["_check"], s))
+    summary = _summary_for(body)
     messages = build_messages(summary, body.question, history, system=_ask_system(s))
     tools = ai_tools.available_tools() if ai.has_tools(s) else None
     events = ai.stream_events(messages, s, tools=tools, run_tool=ai_tools.run_tool, effort="low")

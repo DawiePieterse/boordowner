@@ -8,7 +8,7 @@ const API_BASE = "";
 const Boord = {
   // Bump on every deploy that touches frontend code. Shown in the header so
   // it's obvious whether a device's cached copy is up to date.
-  VERSION: "1.7.1",
+  VERSION: "1.8.0",
 
   // A device whose WiFi is up but that cannot actually reach the farm server
   // gets no error from fetch() - the request just hangs until the OS gives up,

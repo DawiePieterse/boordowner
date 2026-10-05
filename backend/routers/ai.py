@@ -40,6 +40,8 @@ from sqlmodel import Session
 
 import ai
 from db import boord_engine, owner_engine
+from routers.ai_weather import (MAX_METRICS, MAX_YEARS, WEATHER_SYSTEM_PROMPT, WEATHER_USER_TEMPLATE,
+                                build_weather_summary)
 from routers.analogs import build_analogs
 from routers.estimate import (EstimateForecastIn, EstimateLineIn, PackLineIn, _crosscheck,
                               _packout, _r, estimate_view)
@@ -97,11 +99,16 @@ class TurnIn(BaseModel):
 
 
 class AskIn(BaseModel):
-    tab: Literal["estimate"] = "estimate"
+    tab: Literal["estimate", "weather"] = "estimate"
     season: Optional[int] = None
     estimate_id: Optional[int] = None
     draft: Optional[DraftIn] = None
     forecast: Optional[EstimateForecastIn] = None
+    # The Weather tab: the calendar years and measurement keys ticked on it.
+    # Unknown ones are dropped by the summary rather than rejected - a stale
+    # tab is not a bad request (same rule as /api/weather/history).
+    years: List[int] = PydField(default_factory=list, max_length=MAX_YEARS * 4)
+    metrics: List[str] = PydField(default_factory=list, max_length=MAX_METRICS * 4)
     question: str = PydField(min_length=1, max_length=1000)
     history: List[TurnIn] = PydField(default_factory=list, max_length=20)
 
@@ -331,15 +338,16 @@ def build_estimate_summary(boord: Session, owner: Session, body: AskIn, today: d
     return summary
 
 
-def build_messages(summary: dict, question: str, history: list) -> list:
+def build_messages(summary: dict, question: str, history: list,
+                   system: str = SYSTEM_PROMPT, template: str = USER_TEMPLATE) -> list:
     """The figures go once, with the first question; follow-ups carry only
     their text, with the earlier answers in between."""
     data = {k: v for k, v in summary.items() if not k.startswith("_")}
     turns = [*history[-HISTORY_TURNS:], {"q": question, "a": None}]
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": system}]
     for i, t in enumerate(turns):
         q = t["q"].strip()
-        messages.append({"role": "user", "content": USER_TEMPLATE.format(
+        messages.append({"role": "user", "content": template.format(
             summary=json.dumps(data, separators=(",", ":"), default=str), question=q)
             if i == 0 else f"Question: {q}"})
         if t["a"] is not None:
@@ -380,9 +388,14 @@ def ask(body: AskIn):
         raise HTTPException(503, "Ask isn't set up on the farm server (see README, Ask about this estimate)")
     # Both databases are read and closed before the first byte goes to the
     # provider - explicit sessions rather than Depends, so that is plain to see.
+    weather = body.tab == "weather"
     with Session(owner_engine) as owner, Session(boord_engine) as boord:
-        summary = build_estimate_summary(boord, owner, body, date.today())
+        if weather:
+            summary = build_weather_summary(owner, boord, body.years, body.metrics, date.today())
+        else:
+            summary = build_estimate_summary(boord, owner, body, date.today())
     history = [t.model_dump() for t in body.history]
-    messages = build_messages(summary, body.question, history)
+    messages = (build_messages(summary, body.question, history, WEATHER_SYSTEM_PROMPT, WEATHER_USER_TEMPLATE)
+                if weather else build_messages(summary, body.question, history))
     return StreamingResponse(_answer(messages, s, summary["_check"]), media_type="application/x-ndjson",
                              headers={"Cache-Control": "no-store"})

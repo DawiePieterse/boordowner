@@ -13,6 +13,7 @@ import config
 from db import boord_engine
 from tests.test_boord_isolation import _OpenConnectionCounter
 from tests.test_estimate import _seed_history
+from tests.test_weather_and_history import farm_has_gps  # noqa: F401 - fixture
 
 
 @pytest.fixture()
@@ -254,3 +255,115 @@ def test_ask_validates_like_a_save(client, gemini):
         "lines": [{"block_id": "7", "trees": -1}]}})
     assert r.status_code == 422
     assert client.post("/api/ai/ask", json={"season": 2026, "question": ""}).status_code == 422
+
+
+# --------------------------------------------------------------------------- #
+# Ask about this weather (the Weather tab)
+# --------------------------------------------------------------------------- #
+def _seed_weather(years=(2023, 2024, 2025, 2026)):
+    """Noon and midnight on 1 and 2 July of each year (rain on the 2nd), at
+    the farm_has_gps fixture's coordinates."""
+    from datetime import datetime as dt
+    from db import owner_engine
+    from models_owner import WeatherHistory
+    from sqlmodel import Session
+    with Session(owner_engine) as s:
+        for y in years:
+            for day, rain in ((1, 0.0), (2, 4.0)):
+                for hour, t in ((0, 2.0 + y % 10), (12, 14.0 + y % 10)):
+                    s.add(WeatherHistory(timestamp=dt(y, 7, day, hour), temp_c=t, precipitation_mm=rain,
+                                         lat=-34.0, lon=18.5))
+        s.commit()
+
+
+def _clear_weather():
+    from db import owner_engine
+    from models_owner import WeatherHistory
+    from sqlmodel import Session, delete
+    import weather as weather_module
+    with Session(owner_engine) as s:
+        s.exec(delete(WeatherHistory))
+        s.commit()
+    weather_module.invalidate_history_stats()
+    weather_module._cache.clear()
+
+
+def _forecast_payload(today, low=1.0):
+    times = [f"{today.isoformat()}T{h:02d}:00" for h in range(24)]
+    return {"hourly": {"time": times, "temperature_2m": [low if h < 6 else 20.0 for h in range(24)],
+                       "precipitation": [0.5] * 24, "wind_speed_10m": [10.0] * 24,
+                       "relative_humidity_2m": [60.0] * 24, "weather_code": [0] * 24}}
+
+
+@pytest.fixture()
+def weather_record(farm_has_gps):
+    from routers import ai_weather
+    _clear_weather()
+    ai_weather._forecast_cache.clear()
+    _seed_weather()
+    yield
+    _clear_weather()
+    ai_weather._forecast_cache.clear()
+
+
+def _ask_weather(client, monkeypatch, **body):
+    seen, counter = _capture(monkeypatch, answer=("2025 was ", "wetter."))
+    try:
+        r = client.post("/api/ai/ask", json={"tab": "weather", "question": "Which year was warmest?", **body})
+    finally:
+        counter.__exit__()
+    return r, seen
+
+
+def test_weather_ask_sends_the_record_and_the_forecast(client, gemini, weather_record, monkeypatch):
+    from datetime import date
+    from routers import ai_weather
+    monkeypatch.setattr(ai_weather, "fetch_forecast_hourly",
+                        lambda lat, lon, days=8, timeout=15: _forecast_payload(date.today()))
+    monkeypatch.setattr(ai_weather, "fetch_weather_cached", lambda lat, lon: {"temp": 11.0, "humidity": 70})
+    r, seen = _ask_weather(client, monkeypatch, years=[2024, 2025, 1900], metrics=["temp_max_c", "precipitation_mm", "nope"])
+    assert r.status_code == 200
+    events = _ndjson(r)
+    assert "".join(e.get("t", "") for e in events) == "2025 was wetter."
+    done = events[-1]
+    assert done["done"] and 2025 in done["years"] and 1900 not in done["years"]
+    # The coordinates were read and Boord let go before the forecast went out.
+    assert seen["boord_open"] == 0
+
+    s = _summary_sent(seen)
+    assert [m["key"] for m in s["measurements"]] == ["temp_max_c", "precipitation_mm"]
+    assert sorted(s["selected_years"]) == ["2024", "2025"]
+    rain = s["selected_years"]["2025"]["precipitation_mm"]
+    assert rain["days"] == 2 and rain["total"] == 8.0 and rain["days_with_1mm_or_more"] == 1
+    assert s["selected_years"]["2025"]["temp_max_c"]["highest_day"]["value"] == 19.0
+    # Every year on file ranks against the others; coordinates are never sent.
+    from datetime import date as _d
+    assert sorted(s["record"]["temp_max_c"]["by_year"]) == [str(y) for y in (2023, 2024, 2025) if y < _d.today().year]
+    assert s["record"]["temp_max_c"]["by_year"]["2025"] == 19.0
+    assert "-34.0" not in json.dumps(s)
+    assert s["forecast"]["frost_nights_at_or_below_c"]["dates"] == [date.today().isoformat()]
+    assert s["current"] == {"temp": 11.0, "humidity": 70}
+    assert any("Forecast nights at or below" in h for h in s["highlights"])
+
+
+def test_weather_ask_survives_an_unreachable_forecast(client, gemini, weather_record, monkeypatch):
+    from routers import ai_weather
+
+    def boom(*a, **k):
+        raise OSError("no route")
+    monkeypatch.setattr(ai_weather, "fetch_forecast_hourly", boom)
+    monkeypatch.setattr(ai_weather, "fetch_weather_cached", lambda lat, lon: {})
+    r, seen = _ask_weather(client, monkeypatch)
+    assert r.status_code == 200
+    s = _summary_sent(seen)
+    assert s["forecast"] is None and s["current"] is None
+    # No years or measurements ticked: the latest year and the mean temperature.
+    assert list(s["selected_years"]) == ["2026"] and s["measurements"][0]["key"] == "temp_c"
+
+
+def test_weather_ask_without_a_location_has_no_forecast(client, gemini, monkeypatch):
+    _clear_weather()
+    r, seen = _ask_weather(client, monkeypatch)
+    assert r.status_code == 200
+    s = _summary_sent(seen)
+    assert s["forecast"] is None and "no forecast" in s["context"]["location"]

@@ -60,7 +60,10 @@ backend/
     analogs.py       /api/estimate/analogs (similar past seasons; reads owner.db
                      weather only, never fetches)
     ai.py            /api/ai/{status,ask}: Ask about this estimate - builds the
-                     summary, releases Boord, streams the model's answer (NDJSON)
+                     summary, releases Boord, streams the model's answer (NDJSON);
+                     `tab: "weather"` is Ask about this weather (ai_weather.py)
+    ai_weather.py    the Weather tab's summary: ticked years and measurements, the
+                     record year by year, the last 7 days, the farm's forecast
     historical.py    /api/historical-*/import
     historical_report.py   /api/reports/historical-harvest-data (the XLSX workbook)
   tests/             pytest: data endpoints, Boord isolation, ported risk-function tests
@@ -264,6 +267,23 @@ only, with the key on the server instead of in each browser.
   not in the summary gets a "check this against the table" note.
 - Boord's database is read and closed before the provider is called
   (`tests/test_ai.py` asserts it), like every other outbound call here.
+
+### Ask about this weather
+
+The same question box under the Weather tab's chart (`tab: "weather"` on
+`/api/ai/ask`; same key, same provider, nothing more to set up). The summary
+(`routers/ai_weather.py`) is for one location - the farm's GPS from Boord's
+Settings, which is also what the stored history was fetched for - and holds:
+the years and measurements ticked on the tab (per year: days on file, mean,
+lowest and highest day, totals for rain and sunshine, 12 monthly figures); every
+year on file for those measurements, so a year can be ranked against the record
+(the unfinished current year is compared over the same 1 Jan-to-date span);
+the last 7 days; the forecast for today and the next 7 days from Open-Meteo,
+with frost (night at or below 2 °C), heat (day at or above 35 °C) and rain-day
+highlights; and current conditions. With no GPS set there is no forecast. If
+the forecast service can't be reached the answer is built from the history
+alone. The coordinates are used to fetch the forecast but are not sent to the
+AI provider. It only reads; nothing is written.
 
 ## Updates
 

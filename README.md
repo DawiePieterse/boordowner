@@ -199,6 +199,7 @@ port:
 | Boord Owner (this app) | 8443 | `localhost:8010` |
 | Boord Notes | 9443 | `localhost:8020` |
 | Kudde | 8030 | `localhost:8030` |
+| Boord Labour | 8040 | `localhost:8040` |
 
 ```bat
 tailscale serve reset
@@ -206,6 +207,7 @@ tailscale serve --bg --https=443  http://localhost:8000
 tailscale serve --bg --https=8443 http://localhost:8010
 tailscale serve --bg --https=9443 http://localhost:8020
 tailscale serve --bg --https=8030 http://localhost:8030
+tailscale serve --bg --https=8040 http://localhost:8040
 ```
 
 `tailscale serve status` should then list every app this PC actually runs.

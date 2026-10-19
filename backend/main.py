@@ -22,7 +22,7 @@ from sqlalchemy import text
 import config
 from db import boord_engine, init_owner_db
 from routers import (ai, analogs, analysis, boord_data, dashboard, estimate, historical,
-                     historical_report, risk, weather)
+                     historical_report, risk, version, weather)
 
 app = FastAPI(title="Boord Owner")
 
@@ -36,7 +36,7 @@ app.add_middleware(
 # analogs before estimate: both live under /api/estimate, and the fixed
 # /analogs path must be matched before any /{estimate_id} route could take it.
 for module in (dashboard, boord_data, analysis, risk, weather,
-               historical, historical_report, analogs, estimate, ai):
+               historical, historical_report, analogs, estimate, ai, version):
     app.include_router(module.router)
 
 

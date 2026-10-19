@@ -9,6 +9,10 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   /* Keep the browser's native pull-to-refresh out of the way of LWPTR's. */
   overscroll-behavior-y: contain;
+  /* No double-tap-to-zoom: on a phone it swallows the second of two quick
+     taps on a button (tab, preset, Save) and zooms the page instead, which
+     reads as the app ignoring the tap. Pinch zoom still works. */
+  touch-action: manipulation;
 }
 
 /* Offline banner injected by Boord.offlineBanner() (shared/api.js). */
@@ -45,7 +49,24 @@ body {
 .ptr-indicator.spinning i { animation: ptr-spin 0.8s linear infinite; }
 @keyframes ptr-spin { to { transform: rotate(360deg); } }
 
-.boord-header { background: var(--boord-blue); color: white; }
+/* The page runs edge to edge (viewport-fit=cover in index.html), so on a
+   phone with a notch, or the app added to the Home Screen, the header's
+   blue runs up behind the status bar while its text is padded clear of it.
+   max() keeps the ordinary 1rem (Tailwind's p-4) where there is no inset. */
+.boord-header {
+  background: var(--boord-blue); color: white;
+  padding-top: max(1rem, env(safe-area-inset-top));
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+}
+
+/* Main-action buttons, the same as Boord's (frontend/shared/styles.css):
+   the one button on a card the owner is meant to press stands out in the
+   farm blue, instead of being grey like every secondary one beside it. */
+.boord-btn-primary { background: var(--boord-blue); color: white; }
+.boord-btn-primary:active { opacity: 0.85; }
+.boord-btn-primary:disabled { opacity: 0.6; }
+.boord-btn-danger { background: var(--boord-red); color: white; }
 
 .urgency-green { background-color: #dcfce7; border-left: 6px solid var(--boord-green); }
 .urgency-yellow { background-color: #fef9c3; border-left: 6px solid var(--boord-yellow); }

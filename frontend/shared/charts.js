@@ -363,11 +363,13 @@ const LWCharts = (() => {
 
     let table = '<table style="border-collapse:separate;border-spacing:3px;font-size:12px">';
     table += "<tr><td></td>" + colLabels.map((c) =>
-      `<td style="padding:4px 8px;text-align:center;color:#64748b;font-weight:600">${c}</td>`).join("") +
+      `<td style="padding:4px 8px;text-align:center;color:#64748b;font-weight:600">${Boord.escapeHtml(c)}</td>`).join("") +
       (totalColumn ? `<td style="padding:4px 8px 4px 16px;text-align:center;color:#64748b;font-weight:600;white-space:nowrap">${totalColumn.label}</td>` : "") +
       "</tr>";
     rowLabels.forEach((r, ri) => {
-      table += `<tr><td style="padding:4px 8px;color:#64748b;font-weight:600;white-space:nowrap">${r}</td>`;
+      // Row labels are block names typed in Boord, so they are escaped; the
+      // cell text (`text`) is the caller's own markup and is not.
+      table += `<tr><td style="padding:4px 8px;color:#64748b;font-weight:600;white-space:nowrap">${Boord.escapeHtml(r)}</td>`;
       colLabels.forEach((_, ci) => {
         const v = values[ri][ci];
         if (v == null) {
@@ -411,18 +413,18 @@ const LWCharts = (() => {
 
     let html = '<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px">';
     html += "<tr><td></td>" + colLabels.map((c) =>
-      `<td style="padding:2px 4px;text-align:center;color:#64748b;font-weight:600">${c}</td>`).join("") +
+      `<td style="padding:2px 4px;text-align:center;color:#64748b;font-weight:600">${Boord.escapeHtml(c)}</td>`).join("") +
       (totalColumn ? `<td style="padding:2px 4px 2px 16px;text-align:left;color:#64748b;font-weight:600;white-space:nowrap">${totalColumn.label}</td>` : "") +
       "</tr>";
     rowLabels.forEach((r, ri) => {
-      html += `<tr><td style="padding:2px 8px;color:#64748b;font-weight:600;white-space:nowrap;text-align:right">${r}</td>`;
+      html += `<tr><td style="padding:2px 8px;color:#64748b;font-weight:600;white-space:nowrap;text-align:right">${Boord.escapeHtml(r)}</td>`;
       colLabels.forEach((colLabel, ci) => {
         const v = values[ri][ci];
         html += `<td style="width:60px;height:56px;text-align:center;vertical-align:middle">`;
         if (v != null && v > 0) {
           const size = Math.max(minBubble, Math.sqrt(v / max) * maxBubble);
           const showLabel = size >= 30;
-          html += `<div title="${r} · ${colLabel}: ${valueFormat(v)}" style="margin:0 auto;width:${size}px;height:${size}px;` +
+          html += `<div title="${Boord.escapeHtml(r)} · ${Boord.escapeHtml(colLabel)}: ${valueFormat(v)}" style="margin:0 auto;width:${size}px;height:${size}px;` +
             `border-radius:50%;background:#e08e5c;display:flex;align-items:center;justify-content:center;` +
             `color:white;font-size:9px;font-weight:700;line-height:1">${showLabel ? valueFormat(v) : ""}</div>`;
         }
@@ -553,11 +555,12 @@ const LWCharts = (() => {
   }
 
   function legend(container, items) {
-    // items: [{label, color, dashed}]
+    // items: [{label, color, dashed}]. Labels can be variety names typed in
+    // Boord, so they are escaped.
     container.innerHTML = items.map((it) => `
       <span class="inline-flex items-center gap-1.5 text-xs text-slate-600 mr-3">
         <span style="display:inline-block;width:14px;height:${it.dashed ? "0" : "3px"};margin-top:${it.dashed ? "1px" : "0"};border-top:${it.dashed ? "2px dashed " + it.color : "3px solid " + it.color}"></span>
-        ${it.label}
+        ${Boord.escapeHtml(it.label)}
       </span>
     `).join("");
   }

@@ -14,10 +14,14 @@ function updateBannerFarmName() {
 function updateBannerClock() {
   const el = document.getElementById("headerDateTime");
   if (!el) return;
+  // Hours and minutes only (Boord.fmtTime): the seconds made the header
+  // tick every second for nothing the owner reads. The interval below still
+  // runs each second so the minute turns over on time.
   const now = new Date();
-  const dateStr = now.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
-  const timeStr = now.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  el.textContent = `${dateStr}  ·  ${timeStr}`;
+  const dateStr = Boord.fmtDate(now, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const timeStr = Boord.fmtTime(now);
+  const text = `${dateStr}  ·  ${timeStr}`;
+  if (el.textContent !== text) el.textContent = text;
 }
 
 async function updateBannerWeather() {
@@ -29,10 +33,15 @@ async function updateBannerWeather() {
       // The farm's GPS isn't set. Say so rather than leaving the strip blank:
       // Weather, Risk and the Harvest Forecast all stay empty until it is,
       // and a silent gap gives no clue why.
-      el.innerHTML = `<i class="fa-solid fa-location-dot"></i> Set pack house location in Settings`;
+      // Boord Admin's Settings, not this app's: there is no Settings screen
+      // here, and the old wording sent the owner looking for one.
+      el.innerHTML = `<i class="fa-solid fa-location-dot"></i> Set the pack house location in Boord Admin → Settings`;
     } else if (w && w.temp !== undefined && w.temp !== null) {
       const icon = Boord.weatherIcon(w.condition);
-      const conditionText = w.condition ? ` · ${w.condition}` : "";
+      // The condition may come from the farm's own iWeathar station rather
+      // than backend/weather.py's fixed list, so it is escaped like any other
+      // server text going into innerHTML.
+      const conditionText = w.condition ? ` · ${Boord.escapeHtml(w.condition)}` : "";
       const humidityText = w.humidity != null ? ` · ${w.humidity}% humidity` : "";
       // rain_today_mm only comes from the farm's own iWeathar station (see
       // backend/weather.py) - Open-Meteo's /current call here never returns
@@ -198,7 +207,7 @@ function renderBrief(b, { configured = true, cachedAt = null } = {}) {
     return;
   }
   text.textContent = b.text;
-  const when = b.today ? "today" : `from ${new Date(`${b.date}T12:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short" })}`;
+  const when = b.today ? "today" : `from ${Boord.fmtDate(b.date, { day: "numeric", month: "short" })}`;
   meta.textContent = `Written ${when}${cachedAt ? " (saved on this device)" : ""} · ${b.model || b.provider} · can be wrong, check the tabs`;
 }
 
@@ -265,7 +274,7 @@ function renderSupplierOptions(suppliers) {
   const select = document.getElementById("dashSupplierFilter");
   const current = select.value;
   select.innerHTML = `<option value="">All farms / suppliers</option>` +
-    suppliers.filter((s) => s.active).map((s) => `<option value="${s.id}">${s.name}${s.is_own_farm ? " (Own Farm)" : ""}</option>`).join("");
+    suppliers.filter((s) => s.active).map((s) => `<option value="${Boord.escapeHtml(s.id)}">${Boord.escapeHtml(s.name)}${s.is_own_farm ? " (Own Farm)" : ""}</option>`).join("");
   if (current && Array.from(select.options).some((o) => o.value === current)) select.value = current;
 }
 
@@ -370,8 +379,10 @@ async function refreshDashboard() {
       Boord.api(`/api/dashboard/summary?${qs}`),
     ]);
   } catch (e) {
-    // A network failure is NOT an expired session - fall back to cached
-    // figures. Only a real HTTP 401/403 sends the user back to sign in.
+    // A network failure means the server could not be reached: fall back to
+    // the figures this device saved for the same period. Any answer from the
+    // server - a 500 included - is a real failure and gets the toast below;
+    // there is no sign-in here, so no status means "sign in again".
     if (Boord.isNetworkError(e)) {
       // api() has already raised the banner; this only picks its wording.
       const cached = findCachedDashboard(qs);
@@ -392,11 +403,9 @@ async function refreshDashboard() {
   cacheDashboard(qs, harvesting, inTransit, received, summary);
 }
 
-// Whole kilograms with thousands separators - "12,346 kg", the same way
-// Analysis and Risk print them. Per-crate averages keep one decimal.
-function fmtKg(v) {
-  return `${v.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg`;
-}
+// Whole kilograms with thousands separators - "12 346 kg" (shared/api.js
+// Boord.fmtKg, en-ZA). Per-crate averages keep one decimal.
+const fmtKg = (v) => Boord.fmtKg(v);
 
 // The lot colours (see styles.css .urgency-*) mean minutes since the lot
 // was opened, against Boord's own thresholds - said once above the lists
@@ -441,7 +450,7 @@ function renderDashboardKpis(harvesting, inTransit, received, summary) {
     ["Workers Active", `${summary.active_workers} workers`],
     ["Blocks Active", `${summary.active_blocks} blocks`],
     ["Total Kg", fmtKg(totalKg)],
-    ["Total Crates", `${totalCrates.toLocaleString()} crates`],
+    ["Total Crates", `${totalCrates.toLocaleString(Boord.LOCALE)} crates`],
     ["Avg Kg/Lot", avgKgPerLot.toFixed(1), "average net kg per lot (slip) in this period"],
     ["Avg Kg/Crate", avgKgPerCrate.toFixed(1)],
     ["Harvesting", `${h.crates} crates / ${fmtKg(h.kg)}`],
@@ -463,7 +472,7 @@ function renderDashboardLists(harvesting, inTransit, received, summary) {
 
   const lotLine = (l, when) => `
     <div class="p-3${l.urgency ? ` urgency-${l.urgency}` : ""}">
-      <div class="font-semibold text-sm">${l.slip_number} <span class="text-xs font-normal text-slate-500">${l.supplier_name}</span></div>
+      <div class="font-semibold text-sm">${Boord.escapeHtml(l.slip_number)} <span class="text-xs font-normal text-slate-500">${Boord.escapeHtml(l.supplier_name)}</span></div>
       <div class="text-sm">${l.total_crates} crates / ${fmtKg(l.total_kg)} - ${when}</div>
     </div>`;
 
@@ -488,11 +497,11 @@ function renderDashboardLists(harvesting, inTransit, received, summary) {
   document.getElementById("dash-workers-title").textContent = `Workers - ${summary.workers.length} workers`;
   document.getElementById("dash-workers-rows").innerHTML = summary.workers.map((w) => `
     <tr class="border-b">
-      <td class="p-2">${w.worker_id}</td>
-      <td class="p-2">${w.name}</td>
-      <td class="p-2">${w.supplier_name}</td>
+      <td class="p-2">${Boord.escapeHtml(w.worker_id)}</td>
+      <td class="p-2">${Boord.escapeHtml(w.name)}</td>
+      <td class="p-2">${Boord.escapeHtml(w.supplier_name)}</td>
       <td class="p-2">${w.crates}</td>
-      <td class="p-2">${w.total_kg.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+      <td class="p-2">${w.total_kg.toLocaleString(Boord.LOCALE, { maximumFractionDigits: 0 })}</td>
       <td class="p-2">${w.avg_kg_crate.toFixed(1)}</td>
     </tr>
   `).join("") || `<tr><td class="p-2 text-slate-400" colspan="6">No harvest activity in this period</td></tr>`;
@@ -500,9 +509,9 @@ function renderDashboardLists(harvesting, inTransit, received, summary) {
   document.getElementById("dash-blocks-title").textContent = `Blocks - ${summary.blocks.length} blocks`;
   document.getElementById("dash-blocks-rows").innerHTML = summary.blocks.map((b) => `
     <tr class="border-b">
-      <td class="p-2">${b.name}</td>
+      <td class="p-2">${Boord.escapeHtml(b.name)}</td>
       <td class="p-2">${b.crates}</td>
-      <td class="p-2">${b.total_kg.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+      <td class="p-2">${b.total_kg.toLocaleString(Boord.LOCALE, { maximumFractionDigits: 0 })}</td>
       <td class="p-2">${b.avg_kg_crate.toFixed(1)}</td>
       <td class="p-2">${b.avg_kg_tree != null ? b.avg_kg_tree.toFixed(1) : "-"}</td>
       <td class="p-2">${b.avg_kg_hectare != null ? b.avg_kg_hectare.toFixed(1) : "-"}</td>
@@ -569,4 +578,14 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("service-worker.js").catch(() => {});
 }
 
-document.addEventListener("DOMContentLoaded", init);
+// Boord.boot, not init directly: if this device holds one release's
+// index.html beside another's owner.js, init() throws on a missing element,
+// and boot() turns that white page into "This device is running an old copy"
+// with a button that fetches the new one (see shared/api.js). The typeof
+// check covers the mismatch the other way round - this owner.js beside a
+// shared/api.js from before boot() existed - which would otherwise throw
+// here and paint the same white page.
+document.addEventListener("DOMContentLoaded", () => {
+  if (typeof Boord.boot === "function") Boord.boot(init);
+  else init();
+});

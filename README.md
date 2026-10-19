@@ -71,6 +71,7 @@ backend/
     ai_weather.py    the Weather tab's summary: ticked years and measurements, the
                      record year by year, the last 7 days, the farm's forecast
     historical.py    /api/historical-*/import
+    version.py       /api/version (tag, state, frontend VERSION - what Boord's heartbeat reads)
     historical_report.py   /api/reports/historical-harvest-data (the XLSX workbook)
   tests/             pytest: data endpoints, Boord isolation, ported risk-function tests,
                      the AI provider plumbing and endpoints (no network)

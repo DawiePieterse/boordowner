@@ -172,8 +172,8 @@ const LWAnalysisTab = (() => {
         : "";
       return `
       <tr class="border-b">
-        <td class="p-2">${b.name || b.block_id}${flag}</td>
-        <td class="p-2">${b.variety || "-"}</td>
+        <td class="p-2">${Boord.escapeHtml(b.name || b.block_id)}${flag}</td>
+        <td class="p-2">${Boord.escapeHtml(b.variety || "-")}</td>
         <td class="p-2 text-slate-500">${b.hectares ?? "-"}</td>
         <td class="p-2 text-slate-500">${b.trees != null ? b.trees.toLocaleString() : "-"}</td>
         <td class="p-2">${current ?? "-"}</td>
@@ -252,7 +252,7 @@ const LWAnalysisTab = (() => {
     if (select.dataset.varieties !== signature) {
       const previous = select.value;
       select.innerHTML = `<option value="">All Varieties</option>` +
-        names.map((n) => `<option value="${n}">${n}</option>`).join("");
+        names.map((n) => `<option value="${Boord.escapeHtml(n)}">${Boord.escapeHtml(n)}</option>`).join("");
       select.dataset.varieties = signature;
       select.value = names.includes(previous) ? previous : "";
     }

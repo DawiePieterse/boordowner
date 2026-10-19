@@ -35,8 +35,9 @@ const LWAsk = (() => {
   let _status = null;          // /api/ai/status once it has answered
   let _statusLoad = null;
 
-  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  // The shared escaper (shared/api.js), under the short name this file has
+  // always used. It was a copy of its own here until Boord.escapeHtml existed.
+  const esc = Boord.escapeHtml;
 
   function loadStatus() {
     if (_status) return Promise.resolve(_status);

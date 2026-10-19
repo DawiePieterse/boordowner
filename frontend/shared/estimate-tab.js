@@ -42,12 +42,15 @@ const LWEstimateTab = (() => {
 
   const RISK_CACHE_KEY = "boord_cached_risk";   // the Risk tab's own saved copy
   const $ = (id) => document.getElementById(id);
-  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const tonnes = (kg) => (kg == null ? "-" : `${(kg / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} t`);
-  const num = (v, nd = 1) => (v == null ? "-" : Number(v).toLocaleString(undefined, { maximumFractionDigits: nd }));
+  // The shared escaper (shared/api.js), under the short name this file has
+  // always used. It was a copy of its own here until Boord.escapeHtml existed.
+  const esc = Boord.escapeHtml;
+  // Display only, in the app-wide locale (Boord.LOCALE) so the tab reads the
+  // same on every device. Inputs keep the plain numbers the browser expects.
+  const tonnes = (kg) => (kg == null ? "-" : `${(kg / 1000).toLocaleString(Boord.LOCALE, { maximumFractionDigits: 1 })} t`);
+  const num = (v, nd = 1) => (v == null ? "-" : Number(v).toLocaleString(Boord.LOCALE, { maximumFractionDigits: nd }));
   const pct = (v) => (v == null ? "-" : `${v > 0 ? "+" : ""}${Math.round(v)}%`);
-  const fmtDay = (iso) => (iso ? new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : "-");
+  const fmtDay = (iso) => (iso ? Boord.fmtDate(iso, { day: "numeric", month: "short" }, "-") : "-");
 
   function setDirty(on) {
     _dirty = on;
@@ -329,7 +332,7 @@ const LWEstimateTab = (() => {
        total && lastKg ? (total >= lastKg ? "text-green-700" : "text-red-700") : ""],
       ["Blocks estimated", d.estimate ? `${estimated} of ${_lines.length}` : "-", ""],
       d.progress ? ["Picked so far", tonnes(d.progress.actual_kg), ""]
-                 : ["Trees", d.estimate ? _lines.reduce((s, l) => s + (l.trees || 0), 0).toLocaleString() : "-", ""],
+                 : ["Trees", d.estimate ? _lines.reduce((s, l) => s + (l.trees || 0), 0).toLocaleString(Boord.LOCALE) : "-", ""],
     ];
     $("estKpiGrid").innerHTML = cards.map(([label, value, color]) => `
       <div class="bg-white rounded-xl shadow p-4">

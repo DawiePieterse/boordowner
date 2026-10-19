@@ -8,7 +8,7 @@ const API_BASE = "";
 const Boord = {
   // Bump on every deploy that touches frontend code. Shown in the header so
   // it's obvious whether a device's cached copy is up to date.
-  VERSION: "1.9.0",
+  VERSION: "1.9.1",
 
   // A device whose WiFi is up but that cannot actually reach the farm server
   // gets no error from fetch() - the request just hangs until the OS gives up,
@@ -130,12 +130,44 @@ const Boord = {
     }
   },
 
+  // Anything from the server that is interpolated into innerHTML goes through
+  // here - supplier and worker names, slip numbers, block names, estimate
+  // notes, error text. They are typed by people in Boord (or quoted back from
+  // an imported spreadsheet), and a stray "<" or quote otherwise becomes
+  // markup: at best it silently eats the rest of the line, at worst it runs.
+  // Safe inside attribute values as well as text. Copied from Boord's
+  // shared/api.js - keep the two the same.
+  escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  },
+
+  // The human-readable part of a rejected request's body. FastAPI sends
+  // {"detail": "..."} for the errors this app raises itself, but a request
+  // that fails validation (a 422) gets {"detail": [{"loc": [...], "msg":
+  // "...", ...}, ...]} instead - and handing that list back as-is put a lump
+  // of raw JSON in a toast. The first problem's message is enough for the
+  // owner to act on; anything else JSON-shaped is summarised rather than
+  // shown, because nobody on a phone can do anything with braces.
   _errorDetail(text) {
+    let parsed;
     try {
-      const parsed = JSON.parse(text);
-      if (parsed && typeof parsed.detail === "string") return parsed.detail;
-    } catch (e) { /* not JSON - the body text is the detail */ }
-    return text;
+      parsed = JSON.parse(text);
+    } catch (e) {
+      return text;   // not JSON - the body text is the detail
+    }
+    const detail = parsed && parsed.detail;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail) && detail.length) {
+      const first = detail[0];
+      if (first && typeof first.msg === "string") return first.msg;
+      if (typeof first === "string") return first;
+    }
+    return "The server could not accept that request";
   },
 
   async api(path, { method = "GET", body, isForm = false, timeoutMs } = {}) {
@@ -195,9 +227,47 @@ const Boord = {
     return isNaN(d.getTime()) ? null : d;
   },
 
+  // Every date, time and kg figure the owner reads is printed through these,
+  // in South African English, so the same screen reads the same on every
+  // device: left to the browser's own locale, a laptop set to US English
+  // showed "10/18/2026, 2:05:00 PM" beside a phone's "2026/10/18 14:05", and
+  // the owner had to stop and work out which was which. Times are 24-hour
+  // with no seconds - that is how the farm reads a clock, and the seconds
+  // only made the header twitch. These are for display only: values sent to
+  // the server or put in a form input keep their own fixed formats.
+  LOCALE: "en-ZA",
+
+  // "14:05"
+  fmtTime(value, fallback = "") {
+    const d = Boord.parseServerDate(value);
+    return d ? d.toLocaleTimeString(Boord.LOCALE, { hour: "2-digit", minute: "2-digit", hour12: false }) : fallback;
+  },
+
+  // "18 Oct 2026" by default; `opts` replaces the Intl date fields, e.g.
+  // { day: "numeric", month: "short" } for "18 Oct". A bare "YYYY-MM-DD" is
+  // read as midday local time, not as midnight UTC, so it never prints as the
+  // day before on a device west of Greenwich.
+  fmtDate(value, opts, fallback = "") {
+    const isDay = typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
+    const d = isDay ? new Date(`${value.trim()}T12:00:00`) : Boord.parseServerDate(value);
+    if (!d || isNaN(d.getTime())) return fallback;
+    return d.toLocaleDateString(Boord.LOCALE, opts || { day: "numeric", month: "short", year: "numeric" });
+  },
+
+  // "18 Oct 2026, 14:05"
   fmtDateTime(value, fallback = "") {
     const d = Boord.parseServerDate(value);
-    return d ? d.toLocaleString() : fallback;
+    return d ? d.toLocaleString(Boord.LOCALE, {
+      day: "numeric", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    }) : fallback;
+  },
+
+  // Whole kilograms with thousands separators - "12 346 kg". Per-crate
+  // averages keep their one decimal and do not come through here.
+  fmtKg(v, maximumFractionDigits = 0) {
+    if (v === null || v === undefined || isNaN(Number(v))) return "-";
+    return `${Number(v).toLocaleString(Boord.LOCALE, { maximumFractionDigits })} kg`;
   },
 
   // "Today" as the farm sees it, formatted for a date input. toISOString()
@@ -264,18 +334,107 @@ const Boord = {
   // Screens can set this to react to offline flips (e.g. recolor a status pill).
   onOfflineChange: null,
 
+  // A status region, so a screen reader announces the message without
+  // moving focus. Long messages stay up longer: a fixed 2.2s was gone before
+  // anyone could read a server's "Not saved: ..." reason through to the end.
+  // 40ms a character is a comfortable reading pace; 6s is the cap so a toast
+  // never sits over the bottom of the screen for long.
   toast(message) {
     let el = document.getElementById("boord-toast");
     if (!el) {
       el = document.createElement("div");
       el.id = "boord-toast";
       el.className = "toast";
+      el.setAttribute("role", "status");
+      el.setAttribute("aria-live", "polite");
       document.body.appendChild(el);
     }
-    el.textContent = message;
+    const text = String(message ?? "");
+    el.textContent = text;
     el.classList.add("show");
     clearTimeout(el._timer);
-    el._timer = setTimeout(() => el.classList.remove("show"), 2200);
+    el._timer = setTimeout(() => el.classList.remove("show"),
+                           Math.min(6000, 2200 + 40 * text.length));
+  },
+
+  // Runs a screen's start-up and, if it throws, says what is wrong in words
+  // rather than leaving a white page. Copied from Boord's shared/api.js.
+  //
+  // init() opens by reaching for elements out of index.html. If a device ends
+  // up with one release's HTML and another's JavaScript - which a service
+  // worker CAN do, by revalidating the two files at different moments - that
+  // lookup returns null, init() throws, and the screen paints nothing at all.
+  // That happened to Boord's Admin app on a farm server on 2026-09-04, and
+  // from the outside it looked exactly like the server was down.
+  //
+  // A blank screen is the worst possible presentation of this, because it
+  // gives the owner nothing to act on. So: catch it, say what it is, and
+  // offer the one button that actually fixes it.
+  boot(init) {
+    try {
+      Promise.resolve(init()).catch(Boord._bootFailed);
+    } catch (e) {
+      Boord._bootFailed(e);
+    }
+  },
+
+  _bootFailed(error) {
+    console.error("Boord Owner: this screen failed to start", error);
+    // Built with inline styles and no classes on purpose. The stylesheet is
+    // one of the files that may be stale or missing, so this has to look
+    // right without it.
+    const panel = document.createElement("div");
+    panel.setAttribute("style", [
+      "position:fixed", "inset:0", "z-index:99999",
+      "background:#f1f5f9", "color:#0f172a",
+      "font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif",
+      "display:flex", "align-items:center", "justify-content:center",
+      "padding:24px", "text-align:center",
+    ].join(";"));
+    panel.innerHTML = `
+      <div style="max-width:26rem">
+        <div style="font-size:20px;font-weight:700;margin-bottom:12px">
+          This device is running an old copy
+        </div>
+        <div style="margin-bottom:20px">
+          The app on this phone or PC does not match the farm server, so this
+          screen could not start. Nothing has been lost, and nothing is wrong
+          with the server - this device just needs to fetch the new version.
+        </div>
+        <button id="boord-boot-reload" style="
+          background:#0A2F6B;color:#fff;border:0;border-radius:10px;
+          padding:14px 22px;font-size:16px;font-weight:600;cursor:pointer">
+          Update this device
+        </button>
+        <div style="margin-top:16px;font-size:13px;color:#475569">
+          If this keeps happening, close the app completely and open it again.
+        </div>
+      </div>`;
+    document.body.appendChild(panel);
+    panel.querySelector("#boord-boot-reload")
+      .addEventListener("click", () => Boord._reinstall());
+  },
+
+  // Throw away everything this device has cached for the app and load it
+  // fresh. Deliberately more than location.reload(): a reload is answered by
+  // the very service worker whose cache is the problem, which is why "just
+  // refresh the page" does not clear this and people end up clearing site
+  // data by hand.
+  async _reinstall() {
+    try {
+      if ("serviceWorker" in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(registrations.map((r) => r.unregister()));
+      }
+      if (window.caches) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      }
+    } catch (e) {
+      // Nothing useful to do - reload anyway, it may be enough on its own.
+      console.error("Boord Owner: could not clear the cache", e);
+    }
+    location.reload();
   },
 
   // Wires a Today/Week/Season button group to a pair of date inputs: clicking

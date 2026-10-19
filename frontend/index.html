@@ -2,12 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Boord Owner</title>
 <link rel="manifest" href="./manifest.json">
 <link rel="icon" href="./icons/icon-192.png">
 <link rel="apple-touch-icon" href="./icons/icon-180.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Owner">
 <meta name="theme-color" content="#0A2F6B">
 <link rel="stylesheet" href="./shared/tailwind.css">
@@ -85,7 +86,7 @@
 
       <div class="bg-white rounded-xl shadow">
         <button class="collapsible-header w-full flex justify-between items-center p-4 text-left" data-target="dash-intransit-body">
-          <span id="dash-intransit-title" class="font-semibold">In Transit</span>
+          <span id="dash-intransit-title" class="font-semibold">In transit</span>
           <i class="fa-solid fa-chevron-down"></i>
         </button>
         <div id="dash-intransit-body" class="collapsible-body hidden border-t divide-y"></div>
@@ -106,7 +107,7 @@
         </button>
         <div id="dash-workers-body" class="collapsible-body hidden border-t overflow-x-auto">
           <table class="w-full text-sm">
-            <thead><tr class="text-left border-b"><th class="p-2">Employee Code</th><th class="p-2">Worker</th><th class="p-2">Farm/Supplier</th><th class="p-2">Crates</th><th class="p-2">Kg</th><th class="p-2">Avg Kg/Crate</th></tr></thead>
+            <thead><tr class="text-left border-b"><th class="p-2">Emp Nr</th><th class="p-2">Worker</th><th class="p-2">Farm/Supplier</th><th class="p-2">Crates</th><th class="p-2">Kg</th><th class="p-2">Avg Kg/Crate</th></tr></thead>
             <tbody id="dash-workers-rows"></tbody>
           </table>
         </div>
@@ -164,7 +165,7 @@
       <div id="estEmpty" class="bg-white rounded-xl shadow p-4 text-sm space-y-3 hidden">
         <p>No estimate yet for the <span id="estEmptySeason"></span> season.</p>
         <p class="text-slate-500">It starts with every block in Boord's register and its tree count. Fill in kg per tree block by block, or fill them all from last season or a past average and then adjust the blocks that look different in the orchard.</p>
-        <button id="estStartBtn" class="px-3 py-2 bg-slate-200 rounded-lg text-sm">Start an estimate</button>
+        <button id="estStartBtn" class="px-3 py-2 boord-btn-primary rounded-lg text-sm font-semibold">Start an estimate</button>
       </div>
 
       <div id="estEditor" class="bg-white rounded-xl shadow p-4 space-y-3 hidden">
@@ -218,7 +219,7 @@
         </div>
 
         <div class="flex items-center gap-3">
-          <button id="estSaveBtn" class="px-3 py-2 bg-slate-200 rounded-lg text-sm font-semibold">Save</button>
+          <button id="estSaveBtn" class="px-3 py-2 boord-btn-primary rounded-lg text-sm font-semibold">Save</button>
           <button id="estCheckBtn" class="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm hidden" title="The AI model checks every block against its history before you save"><i class="fa-solid fa-list-check text-slate-400"></i> Check before I save</button>
           <span id="estDirty" class="text-xs text-red-700 hidden">Unsaved changes</span>
         </div>

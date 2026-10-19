@@ -218,7 +218,14 @@ echo ==^> Installing any new dependencies...
 :: adds a dependency cannot run without it, so a half-finished install would
 :: take the farm from "an update didn't apply" to "the server no longer
 :: starts", discovered by whoever opens the app next morning.
-"%VENV_PY%" -c "import fastapi, sqlmodel, jose, passlib, openpyxl" >nul 2>&1
+::
+:: The list is backend\requirements.txt by import name (python-multipart
+:: imports as multipart) - no more and no fewer. It used to name jose and
+:: passlib, carried over from Boord's sign-in code when this app was lifted
+:: out of it. This app has no sign-in and installs neither, so every update
+:: stopped here with a healthy server.
+:: tests/test_updater.py holds the two lists together.
+"%VENV_PY%" -c "import fastapi, uvicorn, sqlmodel, multipart, openpyxl, anthropic" >nul 2>&1
 if errorlevel 1 (
     echo.
     echo The server's dependencies are not fully installed, so this update

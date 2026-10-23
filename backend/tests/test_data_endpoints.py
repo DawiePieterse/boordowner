@@ -85,6 +85,16 @@ def test_lots_lists(client):
     assert len(received) == 1 and received[0]["slip_number"] == "261001-003"
 
 
+def test_lots_carry_their_blocks(client):
+    """Each slip lists the block(s) its crates were picked in - a lot has no
+    block of its own, only its crates do. A slip with no crates on record
+    (an external delivery, say) gets an empty list, not a missing key."""
+    pending = client.get("/api/lots/pending").json()
+    assert [l["blocks"] for l in pending] == [["7", "8a"]]
+    assert client.get("/api/lots/in-transit").json()[0]["blocks"] == ["90"]
+    assert client.get("/api/lots/received").json()[0]["blocks"] == []
+
+
 def test_system_settings_and_suppliers(client):
     s = client.get("/api/system-settings").json()
     assert s["packhouse_name"] == "Test Farm" and s["current_harvest_year"] == 2026

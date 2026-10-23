@@ -8,7 +8,7 @@ is no sign-in in this app either - reaching the port is the access control
 (loopback bind + `tailscale serve`, see README's Access section), so every
 endpoint here answers anyone on the tailnet.
 
-The lot-list bodies and their helpers are copied from
+The lot-list bodies and their helpers (block lists included) are copied from
 ../Boord/backend/routers/lots.py, with the write paths (recompute_lot_totals,
 upsert, split, external) left behind.
 """
@@ -50,6 +50,30 @@ def _with_urgency(lot: Lot, settings: SystemSetting, suppliers: dict) -> dict:
         "supplier_name": supplier.name if supplier else "",
         "is_own_farm": supplier.is_own_farm if supplier else False,
     }
+
+
+def _blocks_by_lot(session: Session, lot_ids: list) -> dict:
+    """A lot has no block field of its own - it's stamped per crate, so a
+    slip's block(s) are whatever its HarvestRecords were captured against."""
+    result = {}
+    if not lot_ids:
+        return result
+    for lot_id, block_id in session.exec(
+            select(HarvestRecord.lot_id, HarvestRecord.block_id)
+            .where(HarvestRecord.lot_id.in_(lot_ids)).distinct()).all():
+        if block_id:
+            result.setdefault(lot_id, set()).add(block_id)
+    return result
+
+
+def _attach_blocks(session: Session, rows: list) -> list:
+    """Adds a sorted `blocks` list to each enriched lot dict, so the
+    Dashboard can say which block a slip came from. One query for the whole
+    list, for the same reason as _crate_totals."""
+    found = _blocks_by_lot(session, [r["id"] for r in rows])
+    for r in rows:
+        r["blocks"] = sorted(found.get(r["id"], ()))
+    return rows
 
 
 def _supplier_map(session: Session) -> dict:
@@ -130,7 +154,7 @@ def list_pending(supplier_id: Optional[int] = None, period_start: Optional[date]
         enriched["total_kg"] = round(total_kg, 1)
         result.append(enriched)
     result.sort(key=lambda r: r["age_minutes"], reverse=True)
-    return result
+    return _attach_blocks(session, result)
 
 
 @router.get("/api/lots/in-transit")
@@ -157,7 +181,7 @@ def list_in_transit(supplier_id: Optional[int] = None, period_start: Optional[da
         e["related_lots"] = _related_lots(l, parents_by_slip, children_by_parent_slip, crate_totals)
         enriched.append(e)
     enriched.sort(key=lambda r: r["age_minutes"], reverse=True)
-    return enriched
+    return _attach_blocks(session, enriched)
 
 
 @router.get("/api/lots/received")
@@ -172,7 +196,7 @@ def list_received(period_start: Optional[date] = None, period_end: Optional[date
     if supplier_id is not None:
         query = query.where(Lot.supplier_id == supplier_id)
     lots = session.exec(query.order_by(Lot.received_at.desc())).all()
-    return [_with_urgency(l, settings, suppliers) for l in lots]
+    return _attach_blocks(session, [_with_urgency(l, settings, suppliers) for l in lots])
 
 
 # --------------------------------------------------------------------------- #

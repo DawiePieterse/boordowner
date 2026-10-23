@@ -41,3 +41,22 @@ def test_updater_import_check_names_real_modules():
     # that is not the pip name, would otherwise only show up on the farm.
     for name in sorted(_checked_imports()):
         importlib.import_module(name)
+
+
+def _updater_commands() -> str:
+    # The script's commands only. Its :: comments name "schtasks /end" to say
+    # why it is not used, and that must not count as using it.
+    with open(os.path.join(ROOT, "update_owner_server.bat"), encoding="utf-8") as fh:
+        return "".join(line for line in fh if not line.lstrip().startswith("::"))
+
+
+def test_updater_stops_the_server_before_touching_the_database():
+    # A bare "schtasks /end" leaves uvicorn running: on the farm PC that kept a
+    # server from before v1.9.1 answering on 8010 while the folder was on
+    # v1.9.2, and the updater reported success. stop_server.ps1 must run, and
+    # before the database is copied and migrated.
+    text = _updater_commands()
+    stop = text.find("stop_server.ps1")
+    assert stop != -1
+    assert stop < text.find("init_owner_db")
+    assert "schtasks /end" not in text

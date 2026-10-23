@@ -239,6 +239,28 @@ if errorlevel 1 (
     exit /b 1
 )
 
+:: Not just "schtasks /end". That ends the launcher; the uvicorn process it
+:: spawned can outlive it, keep port 8010 and owner.db open, and leave the
+:: new release unable to start - while the old server goes on answering and
+:: the check at the end reports the new tag. On the farm PC that hid v1.9.1
+:: and v1.9.2 behind a server from before either. stop_server.ps1 ends the
+:: task, checks the port is actually free, and refuses rather than guessing.
+:: Done before the copy below, because a plain file copy of a database a live
+:: server is writing to can be unrecoverable, and so can migrating it.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0stop_server.ps1"
+if errorlevel 1 (
+    echo.
+    echo *** THE SERVER COULD NOT BE STOPPED ***
+    echo.
+    echo Something is still listening on port 8010. Nothing has been changed
+    echo in the database. The code is on !NEWTAG! but the server was never
+    echo restarted, so it is still serving !CURTAG!. Read the message above
+    echo for what holds the port, stop it, and run this again.
+    echo.
+    pause
+    exit /b 1
+)
+
 echo.
 echo ==^> Bringing the Owner database up to date...
 :: A cheap pre-change snapshot, matching Boord's habit. Kept per-run rather
@@ -283,18 +305,19 @@ cd /d "%~dp0"
 >"%~dp0data\installed_version.txt" echo !NEWTAG!
 
 echo.
-echo ==^> Restarting the server...
-cmd /c "schtasks /end /tn ""%TASK%"" >nul 2>&1"
-timeout /t 2 /nobreak >nul
+echo ==^> Starting the server...
+:: Already stopped above, with the port proven free, so this only starts it.
 schtasks /run /tn "%TASK%" >nul
 
 echo.
 echo ==^> Checking it came back up...
+:: /api/version, not /: a server from before v1.9.1 answers / too, and that
+:: is exactly the server that used to pass this check.
 set OK=
 for /l %%i in (1,1,20) do (
     if not defined OK (
         timeout /t 1 /nobreak >nul
-        powershell -NoProfile -Command "try { if ((Invoke-WebRequest -Uri 'http://localhost:8010/' -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200) { exit 0 } } catch {}; exit 1" && set OK=1
+        powershell -NoProfile -Command "try { if ((Invoke-WebRequest -Uri 'http://localhost:8010/api/version' -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200) { exit 0 } } catch {}; exit 1" && set OK=1
     )
 )
 if defined OK (

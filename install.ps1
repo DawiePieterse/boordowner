@@ -283,8 +283,13 @@ $notesLines
     Write-Step "Registering the server to start automatically with Windows..."
     cmd /c "schtasks /query /tn ""$TaskName"" >nul 2>&1"
     if ($LASTEXITCODE -eq 0) {
-        cmd /c "schtasks /end /tn ""$TaskName"" >nul 2>&1"
-        Start-Sleep -Seconds 1
+        # stop_server.ps1, not a bare "schtasks /end": the uvicorn process
+        # outlives the launcher, and a re-install would then start the new
+        # launcher next to an old server still holding the port.
+        & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "stop_server.ps1") -Port $Port -TaskName $TaskName
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "The old server could not be stopped (see above). Restart the PC after this installer finishes."
+        }
         schtasks /delete /tn "$TaskName" /f | Out-Null
     }
     schtasks /create /tn "$TaskName" /tr "`"$LauncherPath`"" /sc onstart /ru SYSTEM /rl highest /f | Out-Null

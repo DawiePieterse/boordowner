@@ -40,15 +40,19 @@
     </div>
   </div>
 
-  <div class="flex overflow-x-auto bg-white shadow sticky top-0 z-10">
-    <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
-    <button class="tab-btn" data-tab="analysis">Analysis</button>
-    <button class="tab-btn" data-tab="estimate">Estimate</button>
-    <button class="tab-btn" data-tab="weather">Weather</button>
-    <button class="tab-btn" data-tab="risk">Risk</button>
-  </div>
+  <!-- A row under the header on a wide screen, a bar along the bottom on a
+       phone (styles.css, .owner-tabs), the same as Boord's Admin: five words
+       across the top of a phone were small to read and to hit, and the
+       bottom is where a thumb already is. -->
+  <nav class="owner-tabs">
+    <button class="tab-btn active" data-tab="dashboard"><i class="fa-solid fa-gauge"></i><span>Dashboard</span></button>
+    <button class="tab-btn" data-tab="analysis"><i class="fa-solid fa-chart-line"></i><span>Analysis</span></button>
+    <button class="tab-btn" data-tab="estimate"><i class="fa-solid fa-calculator"></i><span>Estimate</span></button>
+    <button class="tab-btn" data-tab="weather"><i class="fa-solid fa-cloud-sun"></i><span>Weather</span></button>
+    <button class="tab-btn" data-tab="risk"><i class="fa-solid fa-triangle-exclamation"></i><span>Risk</span></button>
+  </nav>
 
-  <div class="p-4 max-w-7xl mx-auto">
+  <div class="owner-main p-4 max-w-7xl mx-auto">
 
     <div id="tab-dashboard" class="tab-content space-y-4">
       <div class="bg-white rounded-xl shadow p-4 flex flex-wrap gap-3 items-end">

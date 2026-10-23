@@ -93,12 +93,13 @@ Either way you end up with a Boord Owner icon on your desktop and in the Start m
 
 ## What you will see
 
-Across the top: the farm name, today's date and time, and the current weather. Below that, four tabs:
+Across the top: the farm name, today's date and time, and the current weather. There are five tabs, each an icon with its name: along the bottom of the screen on a phone, under the farm name on a computer.
 
 | Tab | What it answers |
 | --- | --- |
 | **Dashboard** | What is happening right now, for any date range you pick |
 | **Analysis** | How this season is tracking against 2020–2025 |
+| **Estimate** | What this season's crop is likely to come to |
 | **Weather** | What the weather has actually done here, 1987 to today |
 | **Risk** | How risky this season's weather looks, and what that means for the harvest |
 

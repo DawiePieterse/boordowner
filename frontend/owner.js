@@ -471,10 +471,14 @@ function renderDashboardLists(harvesting, inTransit, received, summary) {
   const r = _lotTotals(received);
 
   // "· Block 7, 8a" after the supplier, worded as Boord's own Admin
-  // dashboard words it. A slip picked across blocks lists them all; an
-  // external delivery has no crates on record and so no blocks to show.
-  const blocksText = (l) => (l.blocks && l.blocks.length
-    ? ` · Block ${Boord.escapeHtml(l.blocks.join(", "))}` : "");
+  // dashboard words it. A slip picked across blocks lists them all. A
+  // delivery logged from an outside grower (slip "EXT-...") has no crates
+  // and so no block: say what it is instead, so the gap doesn't read as
+  // missing data.
+  const blocksText = (l) => {
+    if (l.blocks && l.blocks.length) return ` · Block ${Boord.escapeHtml(l.blocks.join(", "))}`;
+    return String(l.slip_number || "").startsWith("EXT-") ? " · External delivery" : "";
+  };
   const lotLine = (l, when) => `
     <div class="p-3${l.urgency ? ` urgency-${l.urgency}` : ""}">
       <div class="font-semibold text-sm">${Boord.escapeHtml(l.slip_number)} <span class="text-xs font-normal text-slate-500">${Boord.escapeHtml(l.supplier_name)}${blocksText(l)}</span></div>

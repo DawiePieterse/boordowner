@@ -50,12 +50,15 @@ Two things follow from that, and they matter:
 ## What you're looking at
 
 At the top: the farm name, the current date/time, and today's weather.
-Below that, four tabs:
+There are five tabs, each an icon with its name. On a phone they sit
+along the bottom of the screen; on a computer they run across the top,
+under the farm name.
 
 | Tab | What it answers |
 |---|---|
 | **Dashboard** | What's happening right now, for a date range you pick |
 | **Analysis** | How this season is tracking against 2020–2025 history |
+| **Estimate** | What this season's crop is likely to come to |
 | **Weather** | What the weather has actually done here, 1987 to today |
 | **Risk** | How risky this season's weather looks, and what it implies for the harvest |
 

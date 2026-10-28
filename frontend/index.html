@@ -21,6 +21,7 @@
 <script src="./shared/risk-tab.js"></script>
 <script src="./shared/ai-panel.js"></script>
 <script src="./shared/estimate-tab.js"></script>
+<script src="./shared/market-tab.js"></script>
 <script src="./shared/ptr.js"></script>
 <!-- html2canvas + jsPDF are loaded on the first "download as PDF" tap (charts.js), not here. -->
 </head>
@@ -50,6 +51,7 @@
     <button class="tab-btn" data-tab="estimate"><i class="fa-solid fa-calculator"></i><span>Estimate</span></button>
     <button class="tab-btn" data-tab="weather"><i class="fa-solid fa-cloud-sun"></i><span>Weather</span></button>
     <button class="tab-btn" data-tab="risk"><i class="fa-solid fa-triangle-exclamation"></i><span>Risk</span></button>
+    <button class="tab-btn" data-tab="market"><i class="fa-solid fa-sack-dollar"></i><span>Markets</span></button>
   </nav>
 
   <div class="owner-main p-4 max-w-7xl mx-auto">
@@ -387,6 +389,87 @@
         </div>
         <div class="text-xs text-slate-500 mb-2">Kg picked by month, every season, with each month's share of that season's total.</div>
         <div id="monthlyHeatmap" class="overflow-x-auto"></div>
+      </div>
+    </div>
+
+    <!-- MARKETS -->
+    <div id="tab-market" class="tab-content hidden space-y-4">
+      <div class="text-xs text-slate-500">
+        What the fruit actually made, by pack type and season - the owner's hand-kept market statements, read against a free published reference.
+      </div>
+
+      <div id="marketChartCard" class="bg-white rounded-xl shadow p-4 hidden">
+        <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+          <div class="font-semibold">Daily Prices by Pack Type and Receiver</div>
+          <div class="flex items-center gap-2">
+            <select id="marketSeason" class="border border-slate-300 rounded-lg p-1.5 text-sm" aria-label="Season"></select>
+            <select id="marketMetric" class="border border-slate-300 rounded-lg p-1.5 text-sm" aria-label="Show">
+              <option value="price">Price (R/carton)</option>
+              <option value="cartons">Units sold (cartons)</option>
+            </select>
+            <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="marketChartExport" data-title="Daily Prices by Pack Type and Receiver" title="Download the chart as PDF" aria-label="Download the chart as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+            <button class="chart-xlsx-btn text-slate-400 hover:text-slate-600" title="Download as Excel - the days on the chart, as ticked, plus the season totals" aria-label="Download as Excel"><i class="fa-solid fa-file-excel"></i></button>
+          </div>
+        </div>
+        <div id="marketChartSource" class="text-xs text-slate-500 mb-3"></div>
+        <div class="grid md:grid-cols-2 gap-3 mb-3">
+          <div>
+            <div class="flex items-center gap-2 text-xs font-semibold text-slate-500 mb-1">
+              <span>Pack types</span>
+              <button type="button" data-check-all="pack" class="font-normal underline">all</button>
+              <button type="button" data-check-none="pack" class="font-normal underline">none</button>
+            </div>
+            <div id="marketPackChecks" class="flex flex-wrap gap-x-3 gap-y-1 text-sm"></div>
+          </div>
+          <div>
+            <div class="flex items-center gap-2 text-xs font-semibold text-slate-500 mb-1">
+              <span>Receivers</span>
+              <button type="button" data-check-all="receiver" class="font-normal underline">all</button>
+              <button type="button" data-check-none="receiver" class="font-normal underline">none</button>
+            </div>
+            <div id="marketReceiverChecks" class="flex flex-wrap gap-x-3 gap-y-1 text-sm"></div>
+          </div>
+        </div>
+        <div class="flex items-center gap-2 text-sm mb-3">
+          <span class="text-xs font-semibold text-slate-500">Reference</span>
+          <label class="inline-flex items-center gap-1 cursor-pointer">
+            <input type="checkbox" data-kind="ref" checked>
+            Joburg Market, whole market (dashed line)
+          </label>
+        </div>
+        <!-- The minimum width sits on the exported block, inside the scroller,
+             so a PDF made on a phone captures every week and not just the
+             part on screen; the padding keeps the legend's last row whole. -->
+        <div class="overflow-x-auto">
+          <div id="marketChartExport" style="min-width:720px">
+            <div id="marketDailyChart"></div>
+            <div id="marketDailyLegend" class="mt-2" style="padding-bottom:6px"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="marketPriceCard" class="bg-white rounded-xl shadow p-4 hidden">
+        <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+          <div class="font-semibold">Market Price by Pack Type</div>
+          <div class="flex items-center gap-2">
+            <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="marketPriceExport" data-title="Market Price by Pack Type" title="Download the table as PDF" aria-label="Download the table as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+            <button class="chart-xlsx-btn text-slate-400 hover:text-slate-600" title="Download as Excel - the season totals, plus the days on the chart" aria-label="Download as Excel"><i class="fa-solid fa-file-excel"></i></button>
+          </div>
+        </div>
+        <div class="text-xs text-slate-500 mb-2">R per carton actually made, by pack type and season - from the farm's own market statements (Admin &gt; import_market_prices.py), weighted by cartons sold across every buyer.</div>
+        <div id="marketPriceExport">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead><tr class="text-left border-b" id="marketPriceHead"></tr></thead>
+              <tbody id="marketPriceRows"></tbody>
+            </table>
+          </div>
+          <div id="marketPriceReference" class="text-xs text-slate-500 mt-2"></div>
+        </div>
+      </div>
+
+      <div id="marketPriceEmpty" class="bg-white rounded-xl shadow p-4 text-sm text-slate-500 hidden">
+        No market statements imported yet - run <code class="bg-slate-100 px-1 rounded">scripts/import_market_prices.py</code> against the farm's "Markte" workbook.
       </div>
     </div>
 

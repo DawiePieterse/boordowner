@@ -189,3 +189,62 @@ class SeasonBrief(SQLModel, table=True):
     provider: str = ""
     model: str = ""
     built_at: datetime   # naive UTC
+
+
+class MarketPackPrice(SQLModel, table=True):
+    """One buyer's line for one pack type, from a season's hand-kept
+    litchi "Markte" market-statement workbook's own '<year> Totaal' sheet
+    (scripts/import_market_prices.py) - what the fruit actually made per
+    carton, by pack type, the figure the Estimate tab's pack-out mix
+    (kg_per_carton) has no way to see since that is a weight, not a price.
+    Never written to by the app itself; re-running the import REPLACES
+    the season(s) the workbook it was given has a Totaal sheet for, same
+    as HistoricalHarvest."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    season_year: int = Field(index=True)
+    buyer: str = ""          # e.g. "AgriLink 2kg Lug", "Dapper"
+    pack_type: str = ""      # e.g. "2kg XXL", "180G PUNNET MIX"
+    cartons_sold: float = 0.0
+    price_per_carton: float = 0.0   # R, the sheet's own PRICE column
+    sub_total: float = 0.0          # R, the sheet's own SUB column
+
+
+class MarketDailySale(SQLModel, table=True):
+    """One day's sale of one pack type through one receiver, from the
+    per-receiver sheets of a season's "Markte" workbook (ToroFruit, Dapper,
+    AgriLink USA Lug...; scripts/import_market_prices.py) - the daily grain
+    behind MarketPackPrice's season totals, for the Markets tab's price
+    chart. The receiver is the sheet's own name rather than its MARK
+    column: the sheet is how the office split them (AgriLink by air and by
+    sea are separate sheets, both MARK "AgriLink"). Only seasons with a
+    workbook are here; the season still being sold comes live from Boord
+    Packhouse's delivery notes and Boord's market statements instead (see
+    routers/market.py). Never written by the app itself; re-running the
+    import replaces the workbook's season."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    season_year: int = Field(index=True)
+    sale_date: date
+    receiver: str = ""
+    note_no: str = ""         # the sheet's NR column - the delivery note it went on
+    pack_type: str = ""
+    cartons_sold: float = 0.0
+    price_per_carton: float = 0.0   # R, the sheet's own PRICE column
+
+
+class MarketDailyPrice(SQLModel, table=True):
+    """One day's Litchis total from Joburg Market's own public Daily
+    Prices page (market_reference.py's sync_joburg_litchi_price, a
+    background job - see main.py), kept because that page itself holds no
+    history of its own, only today and a running month-to-date that resets
+    every month. A free reference price the farm's own sales
+    (MarketPackPrice) can be read against - whole-market, not broken down
+    by pack type or grade the way the farm's own figures are. A day the
+    site had nothing to report (out of season, unreachable, a changed page
+    layout) simply gets no row, never a fabricated zero."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    price_date: date = Field(index=True, unique=True)
+    value_sold: float = 0.0    # R, that day's total across the whole market
+    qty_sold: Optional[float] = None   # units, as the page's own "Qty Sold" counts them
+    kg_sold: float = 0.0
+    rand_per_kg: float = 0.0   # value_sold / kg_sold - the figure worth charting
+    fetched_at: datetime   # naive UTC, like every datetime here but WeatherHistory's

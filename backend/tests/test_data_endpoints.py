@@ -21,6 +21,7 @@ _RANGE = "period_start=2026-01-01&period_end=2026-12-31"
     "/api/lots/received",
     "/api/analysis/summary",
     "/api/risk/summary",
+    "/api/market/summary",
 ])
 def test_answers_without_credentials(client, path):
     # The app has no sign-in: reaching the port is the whole of the access

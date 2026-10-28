@@ -114,3 +114,10 @@ BRIEF_HOURS = float(os.environ.get("OWNER_BRIEF_HOURS", "6"))
 # sets how fresh the day's figure is and how soon a missed run is retried.
 # 0 = no background job (tests); a forecast build still records a snapshot.
 FORECAST_SNAPSHOT_HOURS = float(os.environ.get("FORECAST_SNAPSHOT_HOURS", "6"))
+
+# How often the background job fetches Joburg Market's daily Litchis total
+# (market_reference.py, the Markets tab via routers/market.py). The site's own
+# page says it updates "between 12 noon and 1pm every week day", so a few
+# checks a day both catch that window same-day and cost it nothing to miss
+# one. 0 = no background job (tests).
+MARKET_SYNC_HOURS = float(os.environ.get("OWNER_MARKET_SYNC_HOURS", "6"))

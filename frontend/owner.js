@@ -451,11 +451,10 @@ function renderDashboardKpis(harvesting, inTransit, received, summary) {
     ["Blocks Active", `${summary.active_blocks} blocks`],
     ["Total kg picked", fmtKg(totalKg)],
     ["Total Crates", `${totalCrates.toLocaleString(Boord.LOCALE)} crates`],
-    ["Avg Kg/Lot", avgKgPerLot.toFixed(1), "average net kg per lot (slip) in this period"],
+    ["Avg Kg/Slip", avgKgPerLot.toFixed(1), "average net kg per slip in this period"],
     ["Avg Kg/Crate", avgKgPerCrate.toFixed(1)],
     ["Harvesting", `${h.crates} crates / ${fmtKg(h.kg)}`],
     ["In Transit", `${t.crates} crates / ${fmtKg(t.kg)}`],
-    ["Received", `${r.crates} crates / ${fmtKg(r.kg)}`],
     ["Delivered kg", _deliveredKg(summary.delivered_kg)],
     ["Delivered vs Picked", _deliveredVsPicked(summary.delivered_kg, totalKg)],
   ];

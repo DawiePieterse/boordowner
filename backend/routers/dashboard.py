@@ -5,16 +5,23 @@ counts and per-worker / per-block breakdowns Boord's admin Dashboard shows
 (../Boord/backend/routers/dashboard.py), with the wage column removed -
 amount_due and rate_configured are payroll, deliberately not surfaced here.
 
-Reads Boord's live database only (boord_session, read-only). The three
-payments helpers are inlined below, wage-stripped, so this app carries no
-copy of Boord's RateSetting / tier logic.
+Reads Boord's live database (boord_session, read-only). The three payments
+helpers are inlined below, wage-stripped, so this app carries no copy of
+Boord's RateSetting / tier logic. Delivered vs Picked also opens Boord
+Packhouse's packhouse.db read-only, the same way Boord's own admin dashboard
+does (see config.PACKHOUSE_DB_PATH) - it is not this app's data, and missing
+it is not fatal.
 """
+import json
+import os
+import sqlite3
 from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
 
+import config
 from db import get_boord_session, get_own_supplier_id
 from models_boord import Block, HarvestRecord, Supplier, Worker
 from timeutil import day_bounds
@@ -124,6 +131,31 @@ def dashboard_summary(period_start: date, period_end: date, supplier_id: Optiona
         "active_teams": len(active_teams),
         "active_workers": len(active_workers),
         "active_blocks": len(active_blocks),
+        "delivered_kg": _delivered_kg(period_start, period_end, supplier_id),
         "workers": workers,
         "blocks": blocks,
     }
+
+
+def _delivered_kg(period_start: date, period_end: date, supplier_id: Optional[int]) -> Optional[float]:
+    """Kg on Boord Packhouse's delivery notes loaded in the period, for the
+    Delivered vs Picked card. None, and the card says so, when a supplier is
+    picked (a note keeps only its pallets' supplier names, not one grower) or
+    when packhouse.db can't be read: the rest of the dashboard must still
+    load without it. Copied from Boord's own
+    routers/dashboard.py:_delivered_kg / routers/reports.py:_pallet_stats."""
+    if supplier_id is not None or not os.path.exists(config.PACKHOUSE_DB_PATH):
+        return None
+    conn = sqlite3.connect(f"file:{config.PACKHOUSE_DB_PATH}?mode=ro", uri=True, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        notes = conn.execute(
+            "SELECT pallets FROM deliverynote WHERE removed = 0 AND loaded_on >= ? AND loaded_on <= ?",
+            (period_start.isoformat(), period_end.isoformat())).fetchall()
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        conn.close()
+    kg = sum(ln.get("cartons", 0) * ln.get("carton_kg", 0)
+             for n in notes for p in json.loads(n["pallets"] or "[]") for ln in p.get("lines", []))
+    return round(kg, 1)

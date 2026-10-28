@@ -14,7 +14,9 @@ A single `uvicorn main:app` service that:
 - serves a five-tab frontend — **Dashboard** (the Admin Dashboard's
   figures minus wages), **Analysis**, **Estimate**, **Weather**, **Risk**;
 - reads Boord's live `boord.db` **read-only** for the harvest, lot,
-  worker, block and supplier data;
+  worker, block and supplier data (and, optionally, Boord Packhouse's
+  `packhouse.db` **read-only** for the Dashboard's Delivered vs Picked
+  figure - see `BOORD_PACKHOUSE_DB` below);
 - owns a separate database for the weather record, the seasons before
   Boord, and the owner's crop estimates.
 
@@ -239,6 +241,7 @@ the old mapping.
 | Var | Required | Meaning |
 | --- | --- | --- |
 | `BOORD_DB_PATH` | yes on the farm server | absolute path to Boord's `data/boord.db` (dev defaults to `../Boord/data/boord.db`) |
+| `BOORD_PACKHOUSE_DB` | no | absolute path to Boord Packhouse's `data/packhouse.db` (dev defaults to `../Boord-packhouse/data/packhouse.db`); read-only, for the Dashboard's Delivered vs Picked card - missing just drops that one figure |
 | `OWNER_PORT` | no | default 8010 |
 | `FORECAST_SNAPSHOT_HOURS` | no | how often the background job records the forecast's Expected kg (default 6; 0 = off) |
 | `OWNER_DATA_DIR` | no | default `<repo>/data` |

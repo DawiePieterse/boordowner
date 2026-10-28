@@ -1,6 +1,11 @@
 """The data endpoints: open, wage-free, reading Boord read-only."""
+import json
+import os
+import sqlite3
+
 import pytest
 
+import config
 from db import get_boord_session
 from models_boord import SystemSetting
 
@@ -28,7 +33,7 @@ def test_dashboard_summary_is_wage_free(client):
     r = client.get(f"/api/dashboard/summary?{_RANGE}")
     assert r.status_code == 200
     body = r.json()
-    assert set(body) == {"active_teams", "active_workers", "active_blocks", "workers", "blocks"}
+    assert set(body) == {"active_teams", "active_workers", "active_blocks", "delivered_kg", "workers", "blocks"}
     assert "rate_configured" not in body
     assert body["workers"] and all("amount_due" not in w for w in body["workers"])
     # Everything the fake DB dated inside calendar 2026: the own farm's five
@@ -67,6 +72,48 @@ def test_dashboard_sorting_and_derived_figures(client):
     assert block7["avg_kg_crate"] == 17.0
     assert block7["avg_kg_tree"] == round(51.0 / 2000, 1)
     assert block7["avg_kg_hectare"] == round(51.0 / 4.0, 1)
+
+
+def _write_packhouse_db(notes):
+    """notes: [(loaded_on_iso, pallets_json_str), ...], into a fresh
+    packhouse.db at config.PACKHOUSE_DB_PATH (removed on conftest's next
+    client fixture - each test that writes one cleans up after itself)."""
+    conn = sqlite3.connect(config.PACKHOUSE_DB_PATH)
+    conn.execute("CREATE TABLE deliverynote (loaded_on TEXT, removed INTEGER, pallets TEXT)")
+    conn.executemany("INSERT INTO deliverynote (loaded_on, removed, pallets) VALUES (?, 0, ?)", notes)
+    conn.commit()
+    conn.close()
+
+
+def test_delivered_vs_picked_reads_packhouse_db(client):
+    # 10 cartons at 4.5 kg each, one delivery note inside the test range.
+    pallets = json.dumps([{"lines": [{"cartons": 10, "carton_kg": 4.5}]}])
+    _write_packhouse_db([("2026-06-15", pallets)])
+    try:
+        body = client.get(f"/api/dashboard/summary?{_RANGE}").json()
+        assert body["delivered_kg"] == 45.0
+    finally:
+        os.remove(config.PACKHOUSE_DB_PATH)
+
+
+def test_delivered_vs_picked_missing_db_is_none(client):
+    # conftest points BOORD_PACKHOUSE_DB at a path nothing has created -
+    # the common case, Packhouse not installed on this server.
+    assert not os.path.exists(config.PACKHOUSE_DB_PATH)
+    body = client.get(f"/api/dashboard/summary?{_RANGE}").json()
+    assert body["delivered_kg"] is None
+
+
+def test_delivered_vs_picked_is_none_for_a_supplier(client):
+    # A delivery note keeps only its pallets' supplier names, not one
+    # grower - so the card can't be filtered and says so instead.
+    pallets = json.dumps([{"lines": [{"cartons": 10, "carton_kg": 4.5}]}])
+    _write_packhouse_db([("2026-06-15", pallets)])
+    try:
+        body = client.get(f"/api/dashboard/summary?{_RANGE}&supplier_id=1").json()
+        assert body["delivered_kg"] is None
+    finally:
+        os.remove(config.PACKHOUSE_DB_PATH)
 
 
 def test_dashboard_period_is_required(client):

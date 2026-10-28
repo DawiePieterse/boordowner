@@ -17,6 +17,10 @@ _TMP = tempfile.mkdtemp(prefix="boordowner-tests-")
 os.environ["OWNER_DATA_DIR"] = _TMP
 os.environ["OWNER_DB_PATH"] = os.path.join(_TMP, "owner.db")
 os.environ["BOORD_DB_PATH"] = os.path.join(_TMP, "boord.db")
+# Not created here - tests that want a packhouse.db build it themselves
+# (test_delivered_vs_picked.py); everything else exercises the "not
+# installed on this server" path, which is the common case.
+os.environ["BOORD_PACKHOUSE_DB"] = os.path.join(_TMP, "packhouse.db")
 os.environ["BOORD_STARTUP_WAIT_SECONDS"] = "0"
 os.environ["FORECAST_SNAPSHOT_HOURS"] = "0"
 os.environ["OWNER_BRIEF_HOURS"] = "0"

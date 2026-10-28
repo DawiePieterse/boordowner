@@ -24,6 +24,14 @@ OWNER_DB_PATH = os.environ.get("OWNER_DB_PATH", os.path.join(DATA_DIR, "owner.db
 BOORD_DB_PATH = os.path.abspath(os.environ.get(
     "BOORD_DB_PATH", os.path.join(REPO_ROOT, "..", "Boord", "data", "boord.db")))
 
+# Boord Packhouse's live SQLite file, opened read-only, the same way Boord's
+# own admin dashboard reads it for its "Delivered vs Picked" card
+# (../Boord/backend/routers/reports.py) - delivery notes are Packhouse's
+# data, not Boord's. Same env var name as Boord uses for it. Missing or
+# unreadable is not fatal: the card just says so (see routers/dashboard.py).
+PACKHOUSE_DB_PATH = os.path.abspath(os.environ.get(
+    "BOORD_PACKHOUSE_DB", os.path.join(REPO_ROOT, "..", "Boord-packhouse", "data", "packhouse.db")))
+
 # Clear of Boord's ports (8000 prod, 8811 its run_preview).
 #
 # The installer binds this to 127.0.0.1 only, and `tailscale serve` is what

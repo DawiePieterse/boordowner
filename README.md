@@ -472,8 +472,17 @@ Risk tab's Harvest Forecast, which feeds the Expected card's last-7-days
 trend. A background thread (`FORECAST_SNAPSHOT_HOURS`, default 6, 0 = off)
 rebuilds the forecast so days nobody opens the app still get a point; days
 the live weather forecast was unavailable are skipped. The trend starts
-empty and fills over the first week. Schema init
-is `create_all` on an explicit seven-table list (`db._OWNER_TABLES`) plus an
+empty and fills over the first week. There's also `MarketPackPrice` and
+`MarketDailySale` — R per carton by pack type, per season and per receiver
+per day, from the farm's own hand-kept litchi "Markte" workbook
+(`scripts/import_market_prices.py`) — and `MarketDailyPrice`, a daily
+snapshot of Joburg Market's own published Litchis total
+(`backend/market_reference.py`, `OWNER_MARKET_SYNC_HOURS`, default 6, 0 =
+off), all on the Markets tab (`routers/market.py`). The season still being
+sold has no workbook yet, so its daily figures are read live from Boord
+Packhouse's delivery notes and Boord's Markets & Transport invoices and
+statements — both optional, so a farm without them still boots. Schema
+init is `create_all` on an explicit table list (`db._OWNER_TABLES`) plus an
 additive column top-up
 (`db._ensure_owner_columns`) — no
 Alembic; the schema is small and single-writer. Import the pre-Boord

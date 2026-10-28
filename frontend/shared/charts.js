@@ -76,12 +76,17 @@ const LWCharts = (() => {
     return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6 ? "#1e293b" : "#ffffff";
   }
 
-  // series: [{label, color, points:[{x,y}], emphasize, dashed, muted}]
+  // series: [{label, color, points:[{x,y,title}], emphasize, dashed, muted}]
   // xMin/xMax force the plotted domain (e.g. pinning every chart to the
   // same "starts 1 Aug" left edge) instead of fitting to whichever series
   // happens to have the earliest/latest point.
+  // xTicks: [{x, label, sub}] replaces the evenly spread x labels - each a
+  // faint gridline with its label, and `sub` on a second row beneath (the
+  // Markets tab: week numbers, the month under the first week of each).
+  // markers: a dot per point carrying its own `title` (or the series label)
+  // on hover - for sparse data, where a line alone hides which days had any.
   function lineChart(container, { series, xLabel = (x) => x, yLabel = (y) => y, height = 260, minWidthPerPoint = 3,
-                                    xMin: xMinOverride, xMax: xMaxOverride }) {
+                                    xMin: xMinOverride, xMax: xMaxOverride, xTicks, markers = false }) {
     const withPoints = series.filter((s) => s.points && s.points.length);
     if (!withPoints.length) return emptyState(container);
     const allX = withPoints.flatMap((s) => s.points.map((p) => p.x));
@@ -89,7 +94,7 @@ const LWCharts = (() => {
     const xMin = xMinOverride != null ? Math.min(xMinOverride, ...allX) : Math.min(...allX);
     const xMax = xMaxOverride != null ? Math.max(xMaxOverride, ...allX) : Math.max(...allX);
     const yMax = niceMax(Math.max(...allY, 0));
-    const padL = 62, padB = 26, padT = 12, padR = 16;
+    const padL = 62, padB = xTicks ? 42 : 26, padT = 12, padR = 16;
     const width = Math.max(420, Math.min(1400, (xMax - xMin + 1) * minWidthPerPoint + padL + padR));
     const w = width - padL - padR, h = height - padT - padB;
     const sx = (x) => padL + (xMax > xMin ? ((x - xMin) / (xMax - xMin)) * w : w / 2);
@@ -103,11 +108,22 @@ const LWCharts = (() => {
       children.push(svg("line", { x1: padL, x2: padL + w, y1: y, y2: y, stroke: "#e2e8f0", "stroke-width": 1 }));
       children.push(text(padL - 8, y + 4, yLabel(val), { "text-anchor": "end", fill: "#64748b", style: "font-size:12px" }));
     }
-    const labelCount = Math.min(8, Math.max(1, xMax - xMin));
-    for (let i = 0; i <= labelCount; i++) {
-      const x = xMin + Math.round(((xMax - xMin) * i) / labelCount);
-      const px = sx(x);
-      children.push(text(px, padT + h + 18, xLabel(x), { "text-anchor": "middle", fill: "#64748b", style: "font-size:12px" }));
+    if (xTicks) {
+      xTicks.forEach((t) => {
+        const px = sx(t.x);
+        children.push(svg("line", { x1: px, x2: px, y1: padT, y2: padT + h, stroke: "#f1f5f9", "stroke-width": 1 }));
+        children.push(text(px, padT + h + 16, t.label, { "text-anchor": "middle", fill: "#64748b", style: "font-size:12px" }));
+        if (t.sub) {
+          children.push(text(px, padT + h + 33, t.sub, { "text-anchor": "middle", fill: "#334155", style: "font-size:12px;font-weight:600" }));
+        }
+      });
+    } else {
+      const labelCount = Math.min(8, Math.max(1, xMax - xMin));
+      for (let i = 0; i <= labelCount; i++) {
+        const x = xMin + Math.round(((xMax - xMin) * i) / labelCount);
+        const px = sx(x);
+        children.push(text(px, padT + h + 18, xLabel(x), { "text-anchor": "middle", fill: "#64748b", style: "font-size:12px" }));
+      }
     }
 
     withPoints.forEach((s) => {
@@ -118,7 +134,13 @@ const LWCharts = (() => {
         d, fill: "none", stroke: s.color, "stroke-width": s.emphasize ? 3 : 1.5,
         "stroke-dasharray": s.dashed ? "5,4" : "", opacity: s.muted ? 0.55 : 1,
       }, [titleEl]));
-      if (s.emphasize) {
+      if (markers) {
+        s.points.forEach((p) => {
+          const tip = svg("title");
+          tip.textContent = p.title || s.label;
+          children.push(svg("circle", { cx: sx(p.x), cy: sy(p.y), r: 3.5, fill: s.color }, [tip]));
+        });
+      } else if (s.emphasize) {
         const last = s.points[s.points.length - 1];
         children.push(svg("circle", { cx: sx(last.x), cy: sy(last.y), r: 4, fill: s.color }));
       }

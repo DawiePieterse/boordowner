@@ -20,9 +20,10 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 import config
+import market_reference
 from db import boord_engine, init_owner_db
 from routers import (ai, analogs, analysis, boord_data, dashboard, estimate, historical,
-                     historical_report, risk, version, weather)
+                     historical_report, market, risk, version, weather)
 
 app = FastAPI(title="Boord Owner")
 
@@ -36,7 +37,7 @@ app.add_middleware(
 # analogs before estimate: both live under /api/estimate, and the fixed
 # /analogs path must be matched before any /{estimate_id} route could take it.
 for module in (dashboard, boord_data, analysis, risk, weather,
-               historical, historical_report, analogs, estimate, ai, version):
+               historical, historical_report, analogs, estimate, market, ai, version):
     app.include_router(module.router)
 
 
@@ -112,6 +113,7 @@ def on_startup():
     # brief once a day (routers/ai.py write_brief_if_due).
     _start_periodic("forecast-snapshot", risk.snapshot_expected_forecast, config.FORECAST_SNAPSHOT_HOURS, 60)
     _start_periodic("brief", ai.write_brief_if_due, config.BRIEF_HOURS, 120)
+    _start_periodic("market", market_reference.sync_joburg_litchi_price, config.MARKET_SYNC_HOURS, 90)
 
 
 def _start_periodic(tag: str, fn, hours: float, first_delay_s: int) -> None:

@@ -91,6 +91,7 @@ function activateTab(name, { force = false } = {}) {
   else if (name === "estimate") LWEstimateTab.load({ force });
   else if (name === "weather") loadWeather({ force });
   else if (name === "risk") loadRisk({ force });
+  else if (name === "market") loadMarket({ force });
 }
 
 // The one download this app offers: every harvest figure on file, 1987 to
@@ -129,6 +130,15 @@ function bindTabs() {
 async function loadAnalysis(opts) {
   await LWAnalysisTab.load(
     () => Boord.api("/api/analysis/summary"),
+    opts,
+  );
+}
+
+// Reads Boord Packhouse's delivery notes and Boord's market records for the
+// season still being sold, so it gets a longer budget than the 8s default.
+async function loadMarket(opts) {
+  await LWMarketTab.load(
+    () => Boord.api("/api/market/summary", { timeoutMs: 30000 }),
     opts,
   );
 }
@@ -185,6 +195,7 @@ function refreshActiveTab() {
   if (tab === "estimate") return LWEstimateTab.load({ force: true });
   if (tab === "weather") return loadWeather({ force: true });
   if (tab === "risk") return loadRisk({ force: true });
+  if (tab === "market") return loadMarket({ force: true });
   return refreshDashboard();
 }
 
@@ -565,6 +576,7 @@ function init() {
   LWWeatherTab.bind();
   LWRiskTab.bind();
   LWEstimateTab.bind({ fetchRisk: fetchRiskSummary });
+  LWMarketTab.bind();
 
   Boord.offlineBanner("Offline - data may be out of date");
   // Reload when the connection comes back - the browser's own event, not

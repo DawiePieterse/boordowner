@@ -30,8 +30,8 @@ import config
 # which is exactly why init_owner_db() has to pass an explicit table list.
 from models_boord import Block, Supplier
 from models_owner import (ForecastSnapshot, HistoricalAnnualYield, HistoricalHarvest,
-                          SeasonBrief, WeatherHistory, YieldEstimate, YieldEstimateBlock,
-                          YieldEstimatePack)
+                          MarketDailyPrice, MarketDailySale, MarketPackPrice, SeasonBrief, WeatherHistory,
+                          YieldEstimate, YieldEstimateBlock, YieldEstimatePack)
 
 # --------------------------------------------------------------------------- #
 # Owner DB - read/write
@@ -117,6 +117,9 @@ _OWNER_TABLES = [
     YieldEstimatePack.__table__,
     ForecastSnapshot.__table__,
     SeasonBrief.__table__,
+    MarketPackPrice.__table__,
+    MarketDailySale.__table__,
+    MarketDailyPrice.__table__,
 ]
 
 # Serialises the append in weather.sync_recent_weather(): two tab-opens can

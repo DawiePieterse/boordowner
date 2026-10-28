@@ -24,6 +24,7 @@ os.environ["BOORD_PACKHOUSE_DB"] = os.path.join(_TMP, "packhouse.db")
 os.environ["BOORD_STARTUP_WAIT_SECONDS"] = "0"
 os.environ["FORECAST_SNAPSHOT_HOURS"] = "0"
 os.environ["OWNER_BRIEF_HOURS"] = "0"
+os.environ["OWNER_MARKET_SYNC_HOURS"] = "0"
 os.environ["OWNER_NOTES_URL"] = ""
 
 from sqlmodel import Session, SQLModel, create_engine  # noqa: E402

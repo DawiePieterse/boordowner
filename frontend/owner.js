@@ -449,13 +449,15 @@ function renderDashboardKpis(harvesting, inTransit, received, summary) {
     ["Teams Active", `${summary.active_teams} teams`],
     ["Workers Active", `${summary.active_workers} workers`],
     ["Blocks Active", `${summary.active_blocks} blocks`],
-    ["Total Kg", fmtKg(totalKg)],
+    ["Total kg picked", fmtKg(totalKg)],
     ["Total Crates", `${totalCrates.toLocaleString(Boord.LOCALE)} crates`],
     ["Avg Kg/Lot", avgKgPerLot.toFixed(1), "average net kg per lot (slip) in this period"],
     ["Avg Kg/Crate", avgKgPerCrate.toFixed(1)],
     ["Harvesting", `${h.crates} crates / ${fmtKg(h.kg)}`],
     ["In Transit", `${t.crates} crates / ${fmtKg(t.kg)}`],
     ["Received", `${r.crates} crates / ${fmtKg(r.kg)}`],
+    ["Delivered kg", _deliveredKg(summary.delivered_kg)],
+    ["Delivered vs Picked", _deliveredVsPicked(summary.delivered_kg, totalKg)],
   ];
   grid.innerHTML = cards.map(([label, value, hint]) => `
     <div class="bg-white rounded-xl shadow p-4"${hint ? ` title="${hint}"` : ""}>
@@ -463,6 +465,27 @@ function renderDashboardKpis(harvesting, inTransit, received, summary) {
       <div class="text-xl font-bold">${value}</div>
     </div>
   `).join("");
+}
+
+// Kg on the period's Packhouse delivery notes. Delivery notes can't be split
+// by supplier, so with one picked the card says so rather than mislead.
+// Mirrors Boord admin's own dashboard cards (frontend/admin/app.js).
+function _deliveredKg(deliveredKg) {
+  if (deliveredKg == null) {
+    return document.getElementById("dashSupplierFilter").value ? "All suppliers only" : "No Packhouse data";
+  }
+  return fmtKg(deliveredKg);
+}
+
+// Kg on the period's delivery notes less kg picked, and that as a % of
+// picked: negative is fruit picked that never went out (culls, packing
+// loss, or still in the cold store).
+function _deliveredVsPicked(deliveredKg, pickedKg) {
+  if (deliveredKg == null) return _deliveredKg(deliveredKg);
+  const diff = deliveredKg - pickedKg;
+  const sign = diff > 0 ? "+" : "";
+  const pct = pickedKg ? ` (${sign}${(diff / pickedKg * 100).toFixed(1)}%)` : "";
+  return `${sign}${fmtKg(diff)}${pct}`;
 }
 
 function renderDashboardLists(harvesting, inTransit, received, summary) {

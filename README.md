@@ -388,12 +388,17 @@ fingerprint the installer wrote for you is the repo vouching for itself. If
 Boord is on the same PC it offers you Boord's, which a human already put
 there.
 
-Cutting a release:
+Cutting a release, from an up-to-date `main`:
 
 ```bash
-git tag -s v1.1 -m "Boord Owner v1.1"     # needs the signing key
-git push origin v1.1
+scripts/ship.sh v1.10      # push main, then sign, verify and push the tag
+scripts/release.sh v1.10   # sign and verify a tag only, without pushing
 ```
+
+Both need `git config user.signingkey` set to the release key. `release.sh`
+refuses a dirty tree, a tag that already exists, or a `VERSION` that
+disagrees with the tag; `ship.sh` offers to fix the `VERSION` as its own
+commit and asks before it pushes the tag.
 
 Keep `Boord.VERSION` in `frontend/shared/api.js` equal to the tag without
 its `v` — it is what the header shows, and it is how you tell at a glance

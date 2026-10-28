@@ -151,9 +151,9 @@ Merging to `main` changes nothing on the farm. A release is a signed tag, and th
    ```
 3. **Sign and push the tag** (`vX.Y` must equal `VERSION`):
    ```sh
-   git tag -s vX.Y -m "vX.Y" && git verify-tag vX.Y && git push origin vX.Y
+   scripts/ship.sh vX.Y        # signs, verifies and pushes the tag
    ```
-   This repo has no `release.sh`, so nothing else checks `VERSION` against the tag. Check it in step 2.
+   `ship.sh` pushes `main`, then runs `release.sh`, which refuses a dirty tree, an existing tag, or a `VERSION` that disagrees with the tag, and verifies the signature before anything is pushed. Both ask before anything irreversible, so run them in a terminal.
    Never move or reuse a released tag. Fix a wrong one with the next version.
 4. **On the farm PC**, in `C:\BoordOwner`, double-click **`update_owner_server.bat`**. It verifies the signature, stops the server with `stop_server.ps1`, installs dependencies, copies and migrates the database, and starts it again. If it stops with an error, nothing has changed. Read the message; never check the tag out by hand.
 5. **If the release changed `install.ps1`** (its notes say "run install.bat once more"), double-click `install.bat` as well. The updater does not rewrite the launcher or the task.

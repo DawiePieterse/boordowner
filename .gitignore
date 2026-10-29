@@ -16,3 +16,12 @@ data/
 *.db-shm
 
 .DS_Store
+
+# Claude Code's own local state (worktrees, session config) - not shared,
+# and never the same across machines.
+.claude/
+
+# The farm's own private records, kept locally for reference - not the
+# app's data (see data/ above) but still never something to publish.
+Andre/
+docs/Boord_Owner_Training.pptx

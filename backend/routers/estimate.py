@@ -61,7 +61,7 @@ from models_owner import (HistoricalAnnualYield, MarketPackPrice, YieldEstimate,
                           YieldEstimateBlock, YieldEstimatePack)
 from routers.analysis import _block_sort_key, block_season_kg, season_day_kg
 from routers.historical_report import REPORTS_DIR, XLSX_MEDIA, _style_header_cell
-from routers.market import _pack_key, _packhouse_rows
+from routers.market import _pack_key, _packhouse_names, _packhouse_rows
 from timeutil import season_day
 
 router = APIRouter(prefix="/api/estimate", tags=["estimate"])
@@ -518,6 +518,15 @@ def estimate_view(season: Optional[int] = None, estimate_id: Optional[int] = Non
         "progress": _progress(s, season_year, chosen_out["total_kg"] if chosen_out else None,
                               date.today()),
         "market_pack_fill": _season_market_pack_fill(owner, season_year, totals),
+        # Boord Packhouse's own current lists (Settings -> Consignment and ->
+        # Delivery Note) - what the pack-out editor suggests a Receiver or
+        # Pack type from, so a hand-typed line lines up with the farm's own
+        # canonical spelling instead of drifting from it. Active only, same
+        # as routers/market.py's own pack-type and receiver lists; a season's
+        # own saved lines keep whatever spelling they were given even if
+        # Packhouse has since retired or renamed it.
+        "packhouse_receivers": _packhouse_names("receiver"),
+        "packhouse_pack_types": _packhouse_names("packaging"),
     }
 
 
@@ -585,7 +594,7 @@ def _replace_pack(owner: Session, estimate_id: int, pack: list) -> None:
     for p in pack:
         channel = p.channel.strip()
         if not channel:
-            raise HTTPException(400, "Every pack-out line needs a channel")
+            raise HTTPException(400, "Every pack-out line needs a receiver")
         key = (_channel_key(channel), _channel_key(p.pack_type))
         if key in seen:
             label = f"{channel} {p.pack_type.strip()}".strip()
@@ -775,14 +784,14 @@ def export_estimate(estimate_id: int, boord: Session = Depends(get_boord_session
         ps.append([f"Pack-out of {po['basis_kg']:,.0f} kg net picked (estimate {est.season_year}: {est.name})"])
         ps["A1"].font = Font(bold=True)
         ps.append([])
-        ps.append(["Channel", "Pack type", "Kg per carton", "% of picked kg", "Kg", "Cartons", "Note"])
+        ps.append(["Receiver", "Pack type", "Kg per carton", "% of picked kg", "Kg", "Cartons", "Note"])
         for c in ps[ps.max_row]:
             _style_header_cell(c)
         for l in po["lines"]:
             ps.append([l["channel"], l["pack_type"], l["kg_per_carton"], l["share_pct"], l["kg"],
                        l["cartons"], l["note"]])
         ps.append([])
-        ps.append(["By channel", "", "", "% of picked kg", "Kg", "Cartons"])
+        ps.append(["By receiver", "", "", "% of picked kg", "Kg", "Cartons"])
         for c in ps[ps.max_row]:
             c.font = Font(bold=True)
         for c in po["channels"]:

@@ -21,6 +21,7 @@ const LWEstimateTab = (() => {
   let _data = null;       // the last /api/estimate payload
   let _lines = [];        // working copy of the shown estimate's block lines
   let _pack = [];         // working copy of its pack-out mix
+  let _packSort = null;   // { key, dir: 1 | -1 } - which pack-out column is sorted, if any
   let _dirty = false;
   let _editGen = 0;       // bumped on every edit: a reply that lands after one must not wipe it
   let _loadSeq = 0;       // only the newest /api/estimate reply is applied
@@ -127,11 +128,19 @@ const LWEstimateTab = (() => {
       if (!tr) return;
       const p = _pack[parseInt(tr.dataset.packIndex, 10)];
       const field = e.target.dataset.field;
-      if (field === "kg_per_carton" || field === "share_pct") {
+      if (field === "share_pct") {
         const v = parseFloat(e.target.value);
         p[field] = Number.isFinite(v) ? v : null;
       } else {
         p[field] = e.target.value;
+      }
+      // Editing any other field on a line the Fill from market sales button
+      // wrote means it is no longer that figure untouched - the note saying
+      // so would be misleading once the owner has changed it.
+      if (field !== "note" && /^\d{4} market sales$/.test(p.note)) {
+        p.note = "";
+        const noteInput = tr.querySelector('[data-field="note"]');
+        if (noteInput) noteInput.value = "";
       }
       setDirty(true);
       renderPackFigures();
@@ -151,6 +160,10 @@ const LWEstimateTab = (() => {
       if (inputs.length) inputs[inputs.length - 1].focus();
     });
     $("estPackMarketFillBtn").addEventListener("click", marketFill);
+    $("estPackHead").addEventListener("click", (e) => {
+      const th = e.target.closest("[data-sort]");
+      if (th) sortPackBy(th.dataset.sort);
+    });
 
     _ask = LWAsk.create({
       el: $("estAsk"),
@@ -206,6 +219,7 @@ const LWEstimateTab = (() => {
     _estimateId = data.estimate ? data.estimate.id : null;
     _lines = data.estimate ? data.estimate.lines.map((l) => ({ ...l })) : [];
     _pack = data.estimate ? data.estimate.pack.map((p) => ({ ...p })) : [];
+    _packSort = null;   // the server's own saved order, not last click's
     setDirty(false);
     if (_review && _review.key !== aiContext().key) _review = null;   // another version or season
     render();
@@ -386,22 +400,58 @@ const LWEstimateTab = (() => {
     fillBtn.classList.toggle("hidden", !(fill && fill.lines.length));
     if (fill) fillBtn.textContent = `Fill from ${fill.season_year} market sales`;
 
+    const sortTh = (key, label, extra = "") => {
+      const active = _packSort && _packSort.key === key;
+      const icon = active
+        ? ` <i class="fa-solid fa-chevron-${_packSort.dir === 1 ? "up" : "down"} text-xs text-slate-400"></i>` : "";
+      return `<th class="p-2 ${extra} cursor-pointer select-none" data-sort="${key}">${label}${icon}</th>`;
+    };
     $("estPackHead").innerHTML = `<tr class="text-left border-b">
-      <th class="p-2">Channel</th><th class="p-2">Pack type</th>
-      <th class="p-2" title="Measured on the packed fruit after juice is taken off: (picked kg minus juice kg) divided by the units packed, give-away included - the 2025 sheet's method, not the Produksie sheet's. Empty = not cartoned (juice, rejects).">Kg/carton</th>
-      <th class="p-2">% of picked</th><th class="p-2 text-right">Kg</th><th class="p-2 text-right">Cartons</th>
-      <th class="p-2">Note</th><th class="p-2"></th></tr>`;
+      ${sortTh("channel", "Receiver")}${sortTh("pack_type", "Pack type")}
+      ${sortTh("share_pct", "% of picked")}${sortTh("kg", "Kg", "text-right")}${sortTh("cartons", "Cartons", "text-right")}
+      ${sortTh("note", "Note")}<th class="p-2"></th></tr>`;
     $("estPackRows").innerHTML = _pack.map((p, i) => `<tr data-pack-index="${i}" class="border-b">
-      <td class="p-2"><input type="text" maxlength="60" list="estPackChannelList" data-field="channel" value="${esc(p.channel)}" class="border border-slate-300 rounded-lg p-1.5" style="width:9rem" placeholder="e.g. Export sea"></td>
+      <td class="p-2"><input type="text" maxlength="60" list="estPackChannelList" data-field="channel" value="${esc(p.channel)}" class="border border-slate-300 rounded-lg p-1.5" style="width:9rem" placeholder="e.g. Dapper"></td>
       <td class="p-2"><input type="text" maxlength="60" data-field="pack_type" value="${esc(p.pack_type)}" class="border border-slate-300 rounded-lg p-1.5" style="width:7rem" placeholder="e.g. 2 kg"></td>
-      <td class="p-2"><input type="number" min="0" max="50" step="0.05" data-field="kg_per_carton" value="${p.kg_per_carton == null ? "" : p.kg_per_carton}" class="border border-slate-300 rounded-lg p-1.5" style="width:5.5rem"></td>
       <td class="p-2"><input type="number" min="0" max="100" step="0.1" data-field="share_pct" value="${p.share_pct == null ? "" : p.share_pct}" class="border border-slate-300 rounded-lg p-1.5" style="width:5.5rem"></td>
       <td class="p-2 text-right" data-out="kg"></td>
       <td class="p-2 text-right font-semibold" data-out="cartons"></td>
       <td class="p-2"><input type="text" maxlength="200" data-field="note" value="${esc(p.note)}" class="border border-slate-300 rounded-lg p-1.5 w-full" style="min-width:8rem"></td>
       <td class="p-2"><button data-pack-remove="${i}" class="text-slate-400 hover:text-slate-600" title="Remove this line"><i class="fa-solid fa-xmark"></i></button></td>
-    </tr>`).join("") || `<tr><td class="p-2 text-slate-500" colspan="8">No pack-out mix yet - add a line per channel and pack type.</td></tr>`;
+    </tr>`).join("") || `<tr><td class="p-2 text-slate-500" colspan="7">No pack-out mix yet - add a line per receiver and pack type.</td></tr>`;
     renderPackFigures();
+  }
+
+  // Reorders _pack by one column's value (toggling direction on a repeat
+  // click) and re-renders - kg/cartons sort by the computed figure, same as
+  // shown, not the raw stored fields.
+  function sortPackBy(key) {
+    const dir = _packSort && _packSort.key === key ? -_packSort.dir : 1;
+    _packSort = { key, dir };
+    const total = estimateTotal();
+    const po = packout(total, _pack);
+    const usable = po ? _pack.filter((r) => (r.channel || "").trim() && Number.isFinite(r.share_pct)) : [];
+    const lineFor = (p) => {
+      const idx = usable.indexOf(p);
+      return idx === -1 ? null : po.lines[idx];
+    };
+    const valueFor = (p) => {
+      switch (key) {
+        case "channel": case "pack_type": case "note": return (p[key] || "").toLowerCase();
+        case "share_pct": return p.share_pct == null ? -Infinity : p.share_pct;
+        case "kg": { const l = lineFor(p); return l ? l.kg : -Infinity; }
+        case "cartons": { const l = lineFor(p); return l && l.cartons != null ? l.cartons : -Infinity; }
+        default: return 0;
+      }
+    };
+    _pack.sort((a, b) => {
+      const va = valueFor(a), vb = valueFor(b);
+      if (va < vb) return -dir;
+      if (va > vb) return dir;
+      return 0;
+    });
+    setDirty(true);
+    renderPack();
   }
 
   function renderPackFigures() {
@@ -424,6 +474,7 @@ const LWEstimateTab = (() => {
     if (!po) {
       warn.textContent = "";
       $("estPackChannels").innerHTML = "";
+      $("estPackTotal").innerHTML = "";
       return;
     }
     const notes = [];
@@ -437,9 +488,16 @@ const LWEstimateTab = (() => {
     warn.textContent = notes.join(" ");
     warn.className = `text-xs ${over ? "text-red-700" : "text-amber-700"}`;
 
-    $("estPackChannels").innerHTML = `<tr class="text-left border-b"><th class="p-2">By channel</th><th class="p-2 text-right">% of picked</th><th class="p-2 text-right">Kg</th><th class="p-2 text-right">Cartons</th></tr>` +
+    $("estPackChannels").innerHTML = `<tr class="text-left border-b"><th class="p-2">By receiver</th><th class="p-2 text-right">% of picked</th><th class="p-2 text-right">Kg</th><th class="p-2 text-right">Cartons</th></tr>` +
       po.channels.map((c) => `<tr class="border-b"><td class="p-2">${esc(c.channel)}</td><td class="p-2 text-right">${num(c.share_pct)}%</td><td class="p-2 text-right">${num(c.kg, 0)}</td><td class="p-2 text-right">${c.cartons == null ? "-" : num(c.cartons, 0)}</td></tr>`).join("") +
       `<tr class="font-semibold"><td class="p-2">Total</td><td class="p-2 text-right">${num(po.allocated_pct)}%</td><td class="p-2 text-right">${num(po.packed_kg + po.not_packed_kg, 0)}</td><td class="p-2 text-right">${num(po.cartons, 0)}${po.avg_kg_per_carton ? ` <span class="text-xs text-slate-500">(avg ${num(po.avg_kg_per_carton, 2)} kg)</span>` : ""}</td></tr>`;
+
+    $("estPackTotal").innerHTML = `<tr class="font-semibold border-t">
+      <td class="p-2" colspan="2">Total</td>
+      <td class="p-2">${num(po.allocated_pct)}%</td>
+      <td class="p-2 text-right">${num(po.packed_kg + po.not_packed_kg, 0)}</td>
+      <td class="p-2 text-right">${num(po.cartons, 0)}</td>
+      <td class="p-2"></td><td class="p-2"></td></tr>`;
   }
 
   // Refuses what the server would, in words rather than a 422's JSON.
@@ -448,7 +506,7 @@ const LWEstimateTab = (() => {
     let total = 0;
     for (const p of _pack) {
       const ch = (p.channel || "").trim();
-      if (!ch) return "Every pack-out line needs a channel (or remove the empty line).";
+      if (!ch) return "Every pack-out line needs a receiver (or remove the empty line).";
       if (!Number.isFinite(p.share_pct) || p.share_pct < 0 || p.share_pct > 100) return `Give ${ch} a share between 0 and 100%.`;
       if (p.kg_per_carton != null && !(p.kg_per_carton > 0 && p.kg_per_carton <= 50)) return `${ch}: kg per carton must be more than 0 and at most 50, or empty.`;
       const key = `${ch.toLowerCase()}|${(p.pack_type || "").trim().toLowerCase()}`;

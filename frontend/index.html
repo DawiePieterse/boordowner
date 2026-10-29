@@ -215,11 +215,12 @@
 
       <div id="estPack" class="bg-white rounded-xl shadow p-4 space-y-2 hidden">
         <div class="font-semibold">Pack out estimation</div>
-        <div class="text-xs text-slate-500">Your share of the net picked kg per channel and pack type - one split for the whole farm, juice as its own line - and what one carton takes, measured on the packed fruit after juice is taken off (picked kg minus juice kg, over the units packed; give-away included). Leave kg/carton empty for juice and rejects. These are your figures, not packing records - the app has none to check them against.</div>
+        <div class="text-xs text-slate-500">Your share of the net picked kg per receiver and pack type - one split for the whole farm, juice as its own line. Kg per carton comes from Boord Packhouse's own Settings → Consignment list (via Fill from market sales); a hand-added line shows Kg only, with no Cartons to check it against. These are your figures, not packing records - the app has none to check them against. Click a column heading to sort by it.</div>
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead id="estPackHead"></thead>
             <tbody id="estPackRows"></tbody>
+            <tfoot id="estPackTotal"></tfoot>
           </table>
         </div>
         <div class="flex flex-wrap gap-2 items-center justify-between">

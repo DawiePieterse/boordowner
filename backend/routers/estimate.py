@@ -585,7 +585,7 @@ def _replace_pack(owner: Session, estimate_id: int, pack: list) -> None:
     for p in pack:
         channel = p.channel.strip()
         if not channel:
-            raise HTTPException(400, "Every pack-out line needs a channel")
+            raise HTTPException(400, "Every pack-out line needs a receiver")
         key = (_channel_key(channel), _channel_key(p.pack_type))
         if key in seen:
             label = f"{channel} {p.pack_type.strip()}".strip()
@@ -775,14 +775,14 @@ def export_estimate(estimate_id: int, boord: Session = Depends(get_boord_session
         ps.append([f"Pack-out of {po['basis_kg']:,.0f} kg net picked (estimate {est.season_year}: {est.name})"])
         ps["A1"].font = Font(bold=True)
         ps.append([])
-        ps.append(["Channel", "Pack type", "Kg per carton", "% of picked kg", "Kg", "Cartons", "Note"])
+        ps.append(["Receiver", "Pack type", "Kg per carton", "% of picked kg", "Kg", "Cartons", "Note"])
         for c in ps[ps.max_row]:
             _style_header_cell(c)
         for l in po["lines"]:
             ps.append([l["channel"], l["pack_type"], l["kg_per_carton"], l["share_pct"], l["kg"],
                        l["cartons"], l["note"]])
         ps.append([])
-        ps.append(["By channel", "", "", "% of picked kg", "Kg", "Cartons"])
+        ps.append(["By receiver", "", "", "% of picked kg", "Kg", "Cartons"])
         for c in ps[ps.max_row]:
             c.font = Font(bold=True)
         for c in po["channels"]:

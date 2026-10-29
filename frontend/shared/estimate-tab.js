@@ -150,6 +150,7 @@ const LWEstimateTab = (() => {
       const inputs = $("estPackRows").querySelectorAll('input[data-field="channel"]');
       if (inputs.length) inputs[inputs.length - 1].focus();
     });
+    $("estPackMarketFillBtn").addEventListener("click", marketFill);
 
     _ask = LWAsk.create({
       el: $("estAsk"),
@@ -233,6 +234,7 @@ const LWEstimateTab = (() => {
     renderReview();
 
     $("estEditor").classList.toggle("hidden", !d.estimate);
+    $("estPack").classList.toggle("hidden", !d.estimate);
     $("estEmpty").classList.toggle("hidden", !!d.estimate);
     $("estEmptySeason").textContent = d.season_year;
     if (d.estimate) {
@@ -379,6 +381,11 @@ const LWEstimateTab = (() => {
   }
 
   function renderPack() {
+    const fill = _data && _data.market_pack_fill;
+    const fillBtn = $("estPackMarketFillBtn");
+    fillBtn.classList.toggle("hidden", !(fill && fill.lines.length));
+    if (fill) fillBtn.textContent = `Fill from ${fill.season_year} market sales`;
+
     $("estPackHead").innerHTML = `<tr class="text-left border-b">
       <th class="p-2">Channel</th><th class="p-2">Pack type</th>
       <th class="p-2" title="Measured on the packed fruit after juice is taken off: (picked kg minus juice kg) divided by the units packed, give-away included - the 2025 sheet's method, not the Produksie sheet's. Empty = not cartoned (juice, rejects).">Kg/carton</th>
@@ -825,6 +832,24 @@ const LWEstimateTab = (() => {
     _lines.push({ block_id: r.block_id, trees: r.trees || 0, kg_per_tree: null, note: "" });
     setDirty(true);
     renderEditor();
+  }
+
+  // Replaces the whole pack-out mix with routers/estimate.py's
+  // _market_pack_fill(): each buyer's cartons of each pack type from the
+  // season's own market statements, weighed by Packhouse's pack items and
+  // shared over what the farm actually picked that season.
+  function marketFill() {
+    const fill = _data && _data.market_pack_fill;
+    if (!fill || !fill.lines.length) return;
+    if (_pack.length && !confirm(`Replace the current pack-out mix with figures from ${fill.season_year}'s market sales?`)) return;
+    _pack = fill.lines.map((l) => ({ ...l }));
+    setDirty(true);
+    renderPack();
+    if (fill.unmatched_pack_types.length) {
+      Boord.toast(`Left out ${fill.unmatched_pack_types.join(", ")} - no kg/carton set for ${fill.unmatched_pack_types.length === 1 ? "it" : "them"} in Packhouse's Settings → Consignment.`);
+    } else {
+      Boord.toast(`Pack-out mix filled from ${fill.season_year}'s market sales`);
+    }
   }
 
   async function save() {

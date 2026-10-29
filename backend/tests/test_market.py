@@ -40,7 +40,8 @@ def test_market_summary_empty_when_nothing_imported(client):
     Transport tables (an older Boord) - every part empty, never a 500."""
     market = _market(client)
     assert market == {"seasons": [], "pack_types": [], "by_season": {},
-                      "daily": {"seasons": [], "workbook_seasons": [], "points": [], "reference": []},
+                      "daily": {"seasons": [], "workbook_seasons": [], "season_anchor": {"month": 8, "day": 1},
+                                "packs": [], "receivers": [], "points": [], "reference": []},
                       "joburg_market_reference": None}
 
 
@@ -317,7 +318,7 @@ def test_export_cuts_the_daily_sheet_to_what_is_ticked(client):
                (2025, date(2025, 10, 30), "ToroFruit", "PrePac", 50, 230.0))
     disposition, wb = _export(client, "?season=2025&receiver=ToroFruit&pack=2kg%20XL")
     assert 'filename="Market_Prices_2025.xlsx"' in disposition
-    assert _daily_rows(wb["Daily"]) == [(datetime(2025, 10, 29), 44, "ToroFruit", "2kg XL", 100, 220, 22000)]
+    assert _daily_rows(wb["Daily"]) == [(2025, datetime(2025, 10, 29), 44, "ToroFruit", "2kg XL", 100, 220, 22000)]
     assert "Receivers: ToroFruit" in wb["Daily"]["A2"].value
 
 
@@ -327,15 +328,55 @@ def test_export_defaults_to_the_latest_season_and_everything(client):
                (2025, date(2025, 10, 29), "Dapper", "2kg XL", 10, 350.0))
     disposition, wb = _export(client)
     assert 'filename="Market_Prices_2025.xlsx"' in disposition
-    assert [r[2] for r in _daily_rows(wb["Daily"])] == ["Dapper", "ToroFruit"]
+    assert [r[3] for r in _daily_rows(wb["Daily"])] == ["Dapper", "ToroFruit"]
     assert "Joburg Market" not in wb.sheetnames   # none kept yet - no empty sheet
+
+
+def test_export_takes_several_seasons(client):
+    """The chart overlays the seasons ticked, so the workbook carries them all."""
+    _add_sales((2024, date(2024, 11, 5), "Dapper", "PrePac", 5, 500.0),
+               (2025, date(2025, 10, 29), "Dapper", "PrePac", 10, 350.0))
+    disposition, wb = _export(client, "?season=2024&season=2025")
+    assert 'filename="Market_Prices_2024-2025.xlsx"' in disposition
+    assert [(r[0], r[3]) for r in _daily_rows(wb["Daily"])] == [(2024, "Dapper"), (2025, "Dapper")]
+    assert wb["Daily"]["A1"].value == "Daily market sales, 2024 and 2025 seasons"
+
+
+def _write_receivers(names):
+    """names: [(name, sort, active), ...] into packhouse.db's receiver
+    table (Settings -> Delivery Note), beside any packaging table already
+    written. The test removes packhouse.db itself."""
+    conn = sqlite3.connect(config.PACKHOUSE_DB_PATH)
+    conn.execute("CREATE TABLE receiver (name TEXT, sort INTEGER, active INTEGER)")
+    conn.executemany("INSERT INTO receiver VALUES (?, ?, ?)", names)
+    conn.commit()
+    conn.close()
+
+
+def test_lists_follow_packhouse_and_receivers_take_its_spelling(client):
+    """The tab lists Packhouse's active pack types and receivers in its own
+    order - one set up during the season is offered before it has sold
+    anything - then any other name with sales on file. A workbook receiver
+    differing only by case or punctuation ("AGRILINK usa-air") is shown
+    under Packhouse's spelling; a retired one (active=0) is not listed."""
+    _write_packaging([(1, "PrePac", 0, 1), (2, "2kg XL", 1, 1)])
+    _write_receivers([("Agrilink USA Air", 0, 1), ("Tomahawk", 1, 1), ("Old Agent", 2, 0)])
+    try:
+        _add_sales((2025, date(2025, 10, 29), "AGRILINK usa-air", "2kg XL", 10, 300.0),
+                   (2025, date(2025, 10, 30), "Dapper", "15kg Crate", 5, 500.0))
+        daily = _market(client)["daily"]
+    finally:
+        os.remove(config.PACKHOUSE_DB_PATH)
+    assert daily["packs"] == ["PrePac", "2kg XL", "15kg Crate"]
+    assert daily["receivers"] == ["Agrilink USA Air", "Tomahawk", "Dapper"]
+    assert [p["receiver"] for p in daily["points"]] == ["Agrilink USA Air", "Dapper"]
 
 
 def test_export_keeps_a_typed_formula_as_text(client):
     """A receiver typed as "=1+1" must open as that text, not run."""
     _add_sales((2025, date(2025, 10, 29), "=1+1", "2kg XL", 10, 300.0))
     _, wb = _export(client)
-    cell = wb["Daily"].cell(row=5, column=3)
+    cell = wb["Daily"].cell(row=5, column=4)
     assert cell.value == "=1+1" and cell.data_type == "s"
 
 

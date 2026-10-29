@@ -58,14 +58,20 @@ PACK_RENAMES = {
     "4.5kg XL": "4.5kg Rhino",
 }
 
-# Per-receiver sheets that are one receiver to the farm. The office kept
-# AgriLink's 2kg air-freight boxes on a sheet of their own, but they are the
-# same AgriLink USA air channel as the "AgriLink USA Lug" sheet, so they are
-# charted and exported as one receiver - a day on both sheets becomes one
-# point, its price weighted by cartons (routers/market.py _daily). Same
-# shape and same rule as PACK_RENAMES.
+# Per-receiver sheet -> the receiver Boord Packhouse has for it (Settings ->
+# Delivery Note), so a workbook season and a live season chart under the
+# same names. "Lug" is air freight and "See" sea; the office kept AgriLink's
+# 2kg air boxes on a sheet of their own, but they are the same receiver, so
+# a day on both becomes one point, its price weighted by cartons
+# (routers/market.py _daily). Only names that differ by more than case or
+# punctuation need an entry: routers/market.py matches the rest against
+# Packhouse's live receiver list. Same shape and rule as PACK_RENAMES.
 RECEIVER_RENAMES = {
-    "AgriLink 2kg Lug": "AgriLink USA Lug",
+    "AgriLink 2kg Lug": "Agrilink USA Air",
+    "AgriLink USA Lug": "Agrilink USA Air",
+    "AgriLink USA See": "Agrilink USA Sea",
+    "BoereMT": "Boere Mark Trust",
+    "TFFG See": "TFFGSA",
 }
 
 

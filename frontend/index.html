@@ -175,6 +175,7 @@
       </div>
 
       <div id="estEditor" class="bg-white rounded-xl shadow p-4 space-y-3 hidden">
+        <div class="font-semibold">Harvest estimation by block</div>
         <div class="flex flex-wrap gap-3 items-end">
           <div><label class="text-xs text-slate-500 block">Name</label><input id="estName" type="text" maxlength="100" class="border border-slate-300 rounded-lg p-2 text-sm"></div>
           <div><label class="text-xs text-slate-500 block">Fill kg/tree from</label>
@@ -205,30 +206,33 @@
         </div>
         <div><label class="text-xs text-slate-500 block">Notes</label><textarea id="estNotes" rows="2" maxlength="4000" class="border border-slate-300 rounded-lg p-2 text-sm w-full" placeholder="e.g. late start, short season; block 7 can swing either way"></textarea></div>
 
-        <div id="estPack" class="border-t pt-2 space-y-2">
-          <div class="font-semibold">Pack-out</div>
-          <div class="text-xs text-slate-500">Your share of the net picked kg per channel and pack type - one split for the whole farm, juice as its own line - and what one carton takes, measured on the packed fruit after juice is taken off (picked kg minus juice kg, over the units packed; give-away included). Leave kg/carton empty for juice and rejects. These are your figures, not packing records - the app has none to check them against.</div>
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm">
-              <thead id="estPackHead"></thead>
-              <tbody id="estPackRows"></tbody>
-            </table>
-          </div>
-          <div class="flex flex-wrap gap-2 items-center justify-between">
-            <button id="estPackAddBtn" class="px-3 py-2 bg-slate-200 rounded-lg text-sm">Add line</button>
-            <div id="estPackWarn" class="text-xs text-amber-700"></div>
-          </div>
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm"><tbody id="estPackChannels"></tbody></table>
-          </div>
-          <datalist id="estPackChannelList"></datalist>
-        </div>
-
         <div class="flex items-center gap-3">
           <button id="estSaveBtn" class="px-3 py-2 boord-btn-primary rounded-lg text-sm font-semibold">Save</button>
           <button id="estCheckBtn" class="px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm hidden" title="The AI model checks every block against its history before you save"><i class="fa-solid fa-list-check text-slate-400"></i> Check before I save</button>
           <span id="estDirty" class="text-xs text-red-700 hidden">Unsaved changes</span>
         </div>
+      </div>
+
+      <div id="estPack" class="bg-white rounded-xl shadow p-4 space-y-2 hidden">
+        <div class="font-semibold">Pack out estimation</div>
+        <div class="text-xs text-slate-500">Your share of the net picked kg per channel and pack type - one split for the whole farm, juice as its own line - and what one carton takes, measured on the packed fruit after juice is taken off (picked kg minus juice kg, over the units packed; give-away included). Leave kg/carton empty for juice and rejects. These are your figures, not packing records - the app has none to check them against.</div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead id="estPackHead"></thead>
+            <tbody id="estPackRows"></tbody>
+          </table>
+        </div>
+        <div class="flex flex-wrap gap-2 items-center justify-between">
+          <div class="flex flex-wrap gap-2">
+            <button id="estPackAddBtn" class="px-3 py-2 bg-slate-200 rounded-lg text-sm">Add line</button>
+            <button id="estPackMarketFillBtn" class="px-3 py-2 bg-slate-200 rounded-lg text-sm hidden" title="Each buyer's cartons of each pack type from that season's market statements, weighed by Boord Packhouse's own Settings → Consignment list and shared over what the farm actually picked that season"></button>
+          </div>
+          <div id="estPackWarn" class="text-xs text-amber-700"></div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm"><tbody id="estPackChannels"></tbody></table>
+        </div>
+        <datalist id="estPackChannelList"></datalist>
       </div>
 
       <div id="estXc" class="bg-white rounded-xl shadow p-4 text-sm space-y-2">

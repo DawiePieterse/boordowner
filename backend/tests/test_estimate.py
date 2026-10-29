@@ -3,7 +3,7 @@ and the in-season progress/projection."""
 from datetime import date
 
 from db import owner_engine
-from models_owner import HistoricalAnnualYield, HistoricalHarvest
+from models_owner import HistoricalAnnualYield, HistoricalHarvest, MarketPackPrice
 from routers.estimate import _block_reference, _progress
 from sqlmodel import Session
 
@@ -327,6 +327,84 @@ def test_season_total(client):
     cur = client.get("/api/estimate?season=2026").json()["season_total"]
     assert cur["partial"] is True and cur["kg"] > 0
     assert client.get("/api/estimate?season=2027").json()["season_total"] is None
+
+
+def _write_packaging(rows):
+    """Boord Packhouse's own pack-type list (Settings -> Consignment) into a
+    fresh packhouse.db: [(id, name, carton_kg, sort, active), ...]. The test
+    removes packhouse.db itself."""
+    import sqlite3
+
+    import config
+    conn = sqlite3.connect(config.PACKHOUSE_DB_PATH)
+    conn.execute("CREATE TABLE packaging (id INTEGER, name TEXT, carton_kg REAL, sort INTEGER, active INTEGER)")
+    conn.executemany("INSERT INTO packaging VALUES (?, ?, ?, ?, ?)", rows)
+    conn.commit()
+    conn.close()
+
+
+def test_market_pack_fill_allocates_sold_cartons_over_the_season_total(client):
+    """Each buyer's cartons of a pack type, weighed by Packhouse's own
+    carton_kg and shared over the season's picked total - what the pack-out
+    editor's Fill from market sales button offers to start from."""
+    import os
+
+    import config
+    _seed_history()   # season 2025: 70,000 kg picked
+    _write_packaging([(1, "2kg XL", 2.0, 0, 1), (2, "Pre-pac", 0.48, 1, 1)])
+    try:
+        with Session(owner_engine) as s:
+            s.add(MarketPackPrice(season_year=2025, buyer="Dapper", pack_type="2kg XL",
+                                  cartons_sold=1000, price_per_carton=200.0, sub_total=200_000.0))
+            s.add(MarketPackPrice(season_year=2025, buyer="ToroFruit", pack_type="2kg XL",
+                                  cartons_sold=500, price_per_carton=210.0, sub_total=105_000.0))
+            s.commit()
+        fill = client.get("/api/estimate?season=2025").json()["market_pack_fill"]
+    finally:
+        os.remove(config.PACKHOUSE_DB_PATH)
+    # 1000 cartons x 2.0 kg = 2000 kg of 70,000 kg picked = 2.857...%
+    assert fill == {"season_year": 2025, "unmatched_pack_types": [], "lines": [
+        {"channel": "Dapper", "pack_type": "2kg XL", "kg_per_carton": 2.0, "share_pct": 2.86,
+         "note": "2025 market sales"},
+        {"channel": "ToroFruit", "pack_type": "2kg XL", "kg_per_carton": 2.0, "share_pct": 1.43,
+         "note": "2025 market sales"},
+    ]}
+
+
+def test_market_pack_fill_merges_workbook_spellings_and_skips_unweighed_types(client):
+    """"PrePac" and "Pre Pac" both align to Packhouse's "Pre-pac" and are
+    summed as one line; a pack type Packhouse never priced a weight for has
+    nothing to share it against, so it is left out and named instead."""
+    import os
+
+    import config
+    _seed_history()
+    _write_packaging([(1, "Pre-pac", 0.48, 0, 1)])
+    try:
+        with Session(owner_engine) as s:
+            s.add(MarketPackPrice(season_year=2025, buyer="Dapper", pack_type="PrePac",
+                                  cartons_sold=100, price_per_carton=50.0, sub_total=5_000.0))
+            s.add(MarketPackPrice(season_year=2025, buyer="Dapper", pack_type="Pre Pac",
+                                  cartons_sold=50, price_per_carton=50.0, sub_total=2_500.0))
+            s.add(MarketPackPrice(season_year=2025, buyer="Dapper", pack_type="15kg Crate",
+                                  cartons_sold=20, price_per_carton=400.0, sub_total=8_000.0))
+            s.commit()
+        fill = client.get("/api/estimate?season=2025").json()["market_pack_fill"]
+    finally:
+        os.remove(config.PACKHOUSE_DB_PATH)
+    assert fill["unmatched_pack_types"] == ["15kg Crate"]
+    assert fill["lines"] == [{"channel": "Dapper", "pack_type": "Pre-pac", "kg_per_carton": 0.48,
+                              "share_pct": round(150 * 0.48 / 70_000 * 100, 2), "note": "2025 market sales"}]
+
+
+def test_market_pack_fill_is_none_without_a_workbook_or_a_picked_total(client):
+    _seed_history()
+    assert client.get("/api/estimate?season=2025").json()["market_pack_fill"] is None   # no workbook
+    with Session(owner_engine) as s:
+        s.add(MarketPackPrice(season_year=2027, buyer="Dapper", pack_type="2kg XL",
+                              cartons_sold=10, price_per_carton=200.0, sub_total=2_000.0))
+        s.commit()
+    assert client.get("/api/estimate?season=2027").json()["market_pack_fill"] is None   # nothing picked yet
 
 
 def test_estimate_never_runs_the_weather_model(client, monkeypatch):

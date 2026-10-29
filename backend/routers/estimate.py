@@ -57,10 +57,11 @@ from sqlmodel import Session, delete, select
 
 from db import get_boord_session, get_owner_session, own_farm_block_ids
 from models_boord import Block, SystemSetting
-from models_owner import (HistoricalAnnualYield, YieldEstimate, YieldEstimateBlock,
-                          YieldEstimatePack)
+from models_owner import (HistoricalAnnualYield, MarketPackPrice, YieldEstimate,
+                          YieldEstimateBlock, YieldEstimatePack)
 from routers.analysis import _block_sort_key, block_season_kg, season_day_kg
 from routers.historical_report import REPORTS_DIR, XLSX_MEDIA, _style_header_cell
+from routers.market import _pack_key, _packhouse_rows
 from timeutil import season_day
 
 router = APIRouter(prefix="/api/estimate", tags=["estimate"])
@@ -299,6 +300,40 @@ def _pack_rows(owner: Session, estimate_id: int) -> list:
                       .order_by(YieldEstimatePack.position)).all()
 
 
+def _market_pack_fill(owner: Session, season_year: int, available_kg: Optional[float]) -> Optional[dict]:
+    """A pack-out mix built from what the season actually sold: each buyer's
+    cartons of each pack type from that season's Markte market-statement
+    workbook (MarketPackPrice), weighed by Boord Packhouse's own Settings ->
+    Consignment list (Packaging.carton_kg - the only place this app can read
+    a pack's kg; routers/market.py reads the same table for its own pack-type
+    list) and shared out over the season's own picked total - what the Fill
+    from market sales button in the pack-out editor offers to start from.
+    None without a workbook for the season or without a picked total to
+    share it against. A pack type Packhouse never priced a weight for is
+    left out (there is nothing to share it against) and named in
+    `unmatched_pack_types` instead of silently guessed at."""
+    rows = owner.exec(select(MarketPackPrice).where(MarketPackPrice.season_year == season_year)).all()
+    if not rows or not available_kg:
+        return None
+    packaging = {r["name"]: r["carton_kg"] for r in _packhouse_rows("SELECT name, carton_kg FROM packaging")}
+    weight_by_key = {_pack_key(name): (name, kg) for name, kg in packaging.items()}
+    totals: dict = {}   # (buyer, Packhouse's own pack-type spelling) -> cartons
+    unmatched = set()
+    for r in rows:
+        match = weight_by_key.get(_pack_key(r.pack_type))
+        if not match:
+            unmatched.add(r.pack_type)
+            continue
+        totals[(r.buyer.strip(), match[0])] = totals.get((r.buyer.strip(), match[0]), 0.0) + r.cartons_sold
+    lines = []
+    for (buyer, pack_type), cartons in sorted(totals.items()):
+        carton_kg = packaging[pack_type]
+        lines.append({"channel": buyer, "pack_type": pack_type, "kg_per_carton": round(carton_kg, 2),
+                      "share_pct": _r(cartons * carton_kg / available_kg * 100, 2),
+                      "note": f"{season_year} market sales"})
+    return {"season_year": season_year, "lines": lines, "unmatched_pack_types": sorted(unmatched)}
+
+
 # --------------------------------------------------------------------------- #
 # Weather-model cross-check
 # --------------------------------------------------------------------------- #
@@ -460,6 +495,7 @@ def estimate_view(season: Optional[int] = None, estimate_id: Optional[int] = Non
         "estimate": chosen_out,
         "progress": _progress(s, season_year, chosen_out["total_kg"] if chosen_out else None,
                               date.today()),
+        "market_pack_fill": _market_pack_fill(owner, season_year, season_kg),
     }
 
 

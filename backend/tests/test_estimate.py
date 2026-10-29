@@ -448,6 +448,38 @@ def test_market_pack_fill_never_borrows_from_a_later_season(client):
         os.remove(config.PACKHOUSE_DB_PATH)
 
 
+def _write_receivers(rows):
+    """Boord Packhouse's own receiver list (Settings -> Delivery Note) into
+    packhouse.db: [(name, sort, active), ...]. The test removes
+    packhouse.db itself."""
+    import sqlite3
+
+    import config
+    conn = sqlite3.connect(config.PACKHOUSE_DB_PATH)
+    conn.execute("CREATE TABLE receiver (name TEXT, sort INTEGER, active INTEGER)")
+    conn.executemany("INSERT INTO receiver VALUES (?, ?, ?)", rows)
+    conn.commit()
+    conn.close()
+
+
+def test_pack_editor_lists_follow_packhouses_own_receivers_and_pack_types(client):
+    """The pack-out editor's Receiver and Pack type suggestions are Boord
+    Packhouse's own current lists (Settings -> Delivery Note and ->
+    Consignment) - active only, in Packhouse's own order - so a hand-typed
+    line lines up with the farm's own canonical spelling."""
+    import os
+
+    import config
+    _write_packaging([(1, "PrePac", 0.48, 0, 1), (2, "2kg XL", 2.0, 1, 1), (3, "Retired", 1.0, 2, 0)])
+    _write_receivers([("Dapper", 0, 1), ("ToroFruit", 1, 1), ("Old Agent", 2, 0)])
+    try:
+        body = client.get("/api/estimate?season=2026").json()
+    finally:
+        os.remove(config.PACKHOUSE_DB_PATH)
+    assert body["packhouse_receivers"] == ["Dapper", "ToroFruit"]
+    assert body["packhouse_pack_types"] == ["PrePac", "2kg XL"]
+
+
 def test_estimate_never_runs_the_weather_model(client, monkeypatch):
     import routers.risk as risk_module
     boom = lambda *a, **k: (_ for _ in ()).throw(AssertionError("weather model called"))

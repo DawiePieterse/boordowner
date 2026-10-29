@@ -52,6 +52,19 @@ const LWEstimateTab = (() => {
   const num = (v, nd = 1) => (v == null ? "-" : Number(v).toLocaleString(Boord.LOCALE, { maximumFractionDigits: nd }));
   const pct = (v) => (v == null ? "-" : `${v > 0 ? "+" : ""}${Math.round(v)}%`);
   const fmtDay = (iso) => (iso ? Boord.fmtDate(iso, { day: "numeric", month: "short" }, "-") : "-");
+  // A datalist's options: Boord Packhouse's own current list first (its own
+  // order), then anything already in the pack-out mix that isn't on it -
+  // a season's own line keeps its spelling even once Packhouse retires or
+  // renames it. Case/space-blind de-duplication, first spelling wins.
+  const mergedOptions = (canonical, extra) => {
+    const seen = new Set();
+    const out = [];
+    for (const n of [...canonical, ...extra]) {
+      const key = (n || "").trim().toLowerCase();
+      if (key && !seen.has(key)) { seen.add(key); out.push(n.trim()); }
+    }
+    return out;
+  };
 
   function setDirty(on) {
     _dirty = on;
@@ -412,7 +425,7 @@ const LWEstimateTab = (() => {
       ${sortTh("note", "Note")}<th class="p-2"></th></tr>`;
     $("estPackRows").innerHTML = _pack.map((p, i) => `<tr data-pack-index="${i}" class="border-b">
       <td class="p-2"><input type="text" maxlength="60" list="estPackChannelList" data-field="channel" value="${esc(p.channel)}" class="border border-slate-300 rounded-lg p-1.5" style="width:9rem" placeholder="e.g. Dapper"></td>
-      <td class="p-2"><input type="text" maxlength="60" data-field="pack_type" value="${esc(p.pack_type)}" class="border border-slate-300 rounded-lg p-1.5" style="width:7rem" placeholder="e.g. 2 kg"></td>
+      <td class="p-2"><input type="text" maxlength="60" list="estPackTypeList" data-field="pack_type" value="${esc(p.pack_type)}" class="border border-slate-300 rounded-lg p-1.5" style="width:7rem" placeholder="e.g. 2 kg"></td>
       <td class="p-2"><input type="number" min="0" max="100" step="0.1" data-field="share_pct" value="${p.share_pct == null ? "" : p.share_pct}" class="border border-slate-300 rounded-lg p-1.5" style="width:5.5rem"></td>
       <td class="p-2 text-right" data-out="kg"></td>
       <td class="p-2 text-right font-semibold" data-out="cartons"></td>
@@ -467,8 +480,10 @@ const LWEstimateTab = (() => {
       tr.querySelector('[data-out="kg"]').textContent = l ? num(l.kg, 0) : "-";
       tr.querySelector('[data-out="cartons"]').textContent = l && l.cartons != null ? num(l.cartons, 0) : "-";
     });
-    const names = [...new Set(_pack.map((p) => (p.channel || "").trim()).filter(Boolean))];
-    $("estPackChannelList").innerHTML = names.map((n) => `<option value="${esc(n)}">`).join("");
+    const receivers = mergedOptions(_data.packhouse_receivers || [], _pack.map((p) => p.channel || ""));
+    $("estPackChannelList").innerHTML = receivers.map((n) => `<option value="${esc(n)}">`).join("");
+    const packTypes = mergedOptions(_data.packhouse_pack_types || [], _pack.map((p) => p.pack_type || ""));
+    $("estPackTypeList").innerHTML = packTypes.map((n) => `<option value="${esc(n)}">`).join("");
 
     const warn = $("estPackWarn");
     if (!po) {

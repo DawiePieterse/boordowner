@@ -61,7 +61,7 @@ from models_owner import (HistoricalAnnualYield, MarketPackPrice, YieldEstimate,
                           YieldEstimateBlock, YieldEstimatePack)
 from routers.analysis import _block_sort_key, block_season_kg, season_day_kg
 from routers.historical_report import REPORTS_DIR, XLSX_MEDIA, _style_header_cell
-from routers.market import _pack_key, _packhouse_rows
+from routers.market import _pack_key, _packhouse_names, _packhouse_rows
 from timeutil import season_day
 
 router = APIRouter(prefix="/api/estimate", tags=["estimate"])
@@ -518,6 +518,15 @@ def estimate_view(season: Optional[int] = None, estimate_id: Optional[int] = Non
         "progress": _progress(s, season_year, chosen_out["total_kg"] if chosen_out else None,
                               date.today()),
         "market_pack_fill": _season_market_pack_fill(owner, season_year, totals),
+        # Boord Packhouse's own current lists (Settings -> Consignment and ->
+        # Delivery Note) - what the pack-out editor suggests a Receiver or
+        # Pack type from, so a hand-typed line lines up with the farm's own
+        # canonical spelling instead of drifting from it. Active only, same
+        # as routers/market.py's own pack-type and receiver lists; a season's
+        # own saved lines keep whatever spelling they were given even if
+        # Packhouse has since retired or renamed it.
+        "packhouse_receivers": _packhouse_names("receiver"),
+        "packhouse_pack_types": _packhouse_names("packaging"),
     }
 
 

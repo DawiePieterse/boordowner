@@ -334,6 +334,28 @@ def _market_pack_fill(owner: Session, season_year: int, available_kg: Optional[f
     return {"season_year": season_year, "lines": lines, "unmatched_pack_types": sorted(unmatched)}
 
 
+def _latest_market_season(owner: Session, before: int) -> Optional[int]:
+    """The most recent season, strictly before `before`, with a Markte
+    workbook on file - what a season with no sales of its own yet (the one
+    still being picked) borrows instead, in _season_market_pack_fill()."""
+    return owner.exec(select(MarketPackPrice.season_year).where(MarketPackPrice.season_year < before)
+                      .order_by(MarketPackPrice.season_year.desc())).first()
+
+
+def _season_market_pack_fill(owner: Session, season_year: int, totals: dict) -> Optional[dict]:
+    """market_pack_fill for the season being viewed, falling back to the
+    latest earlier season with a workbook when this one has none of its own
+    yet - the season still being picked offers last season's actual mix as
+    a starting point, same as it does nothing else."""
+    fill = _market_pack_fill(owner, season_year, totals.get(season_year))
+    if fill is not None:
+        return fill
+    fallback_year = _latest_market_season(owner, season_year)
+    if fallback_year is None:
+        return None
+    return _market_pack_fill(owner, fallback_year, totals.get(fallback_year))
+
+
 # --------------------------------------------------------------------------- #
 # Weather-model cross-check
 # --------------------------------------------------------------------------- #
@@ -495,7 +517,7 @@ def estimate_view(season: Optional[int] = None, estimate_id: Optional[int] = Non
         "estimate": chosen_out,
         "progress": _progress(s, season_year, chosen_out["total_kg"] if chosen_out else None,
                               date.today()),
-        "market_pack_fill": _market_pack_fill(owner, season_year, season_kg),
+        "market_pack_fill": _season_market_pack_fill(owner, season_year, totals),
     }
 
 

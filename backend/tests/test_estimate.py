@@ -407,6 +407,47 @@ def test_market_pack_fill_is_none_without_a_workbook_or_a_picked_total(client):
     assert client.get("/api/estimate?season=2027").json()["market_pack_fill"] is None   # nothing picked yet
 
 
+def test_market_pack_fill_carries_forward_to_a_season_with_no_sales_of_its_own(client):
+    """The season being picked (2026) has no Markte workbook yet - it
+    borrows 2025's actual mix instead, scaled by 2025's OWN picked total,
+    not 2026's. The note still says where the figure came from."""
+    import os
+
+    import config
+    _seed_history()   # season 2025: 70,000 kg picked
+    _write_packaging([(1, "2kg XL", 2.0, 0, 1)])
+    try:
+        with Session(owner_engine) as s:
+            s.add(MarketPackPrice(season_year=2025, buyer="Dapper", pack_type="2kg XL",
+                                  cartons_sold=1000, price_per_carton=200.0, sub_total=200_000.0))
+            s.commit()
+        fill = client.get("/api/estimate?season=2026").json()["market_pack_fill"]
+    finally:
+        os.remove(config.PACKHOUSE_DB_PATH)
+    assert fill == {"season_year": 2025, "unmatched_pack_types": [], "lines": [
+        {"channel": "Dapper", "pack_type": "2kg XL", "kg_per_carton": 2.0,
+         "share_pct": round(1000 * 2.0 / 70_000 * 100, 2), "note": "2025 market sales"},
+    ]}
+
+
+def test_market_pack_fill_never_borrows_from_a_later_season(client):
+    """A season before the one with a workbook gets nothing to borrow - only
+    seasons already in the past have an actual mix to show."""
+    import os
+
+    import config
+    _seed_history()
+    _write_packaging([(1, "2kg XL", 2.0, 0, 1)])
+    try:
+        with Session(owner_engine) as s:
+            s.add(MarketPackPrice(season_year=2025, buyer="Dapper", pack_type="2kg XL",
+                                  cartons_sold=1000, price_per_carton=200.0, sub_total=200_000.0))
+            s.commit()
+        assert client.get("/api/estimate?season=2024").json()["market_pack_fill"] is None
+    finally:
+        os.remove(config.PACKHOUSE_DB_PATH)
+
+
 def test_estimate_never_runs_the_weather_model(client, monkeypatch):
     import routers.risk as risk_module
     boom = lambda *a, **k: (_ for _ in ()).throw(AssertionError("weather model called"))

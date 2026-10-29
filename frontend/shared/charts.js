@@ -128,8 +128,11 @@ const LWCharts = (() => {
   // Markets tab: week numbers, the month under the first week of each).
   // markers: a dot per point carrying its own `title` (or the series label)
   // on hover - for sparse data, where a line alone hides which days had any.
+  // ySteps: how many intervals the y-axis is split into. niceMax() rounds
+  // the top to 1, 2 or 5 x 10^n, so 10 steps still lands on round values
+  // (R0, R100 ... R1 000).
   function lineChart(container, { series, xLabel = (x) => x, yLabel = (y) => y, height = 260, minWidthPerPoint = 3,
-                                    xMin: xMinOverride, xMax: xMaxOverride, xTicks, markers = false }) {
+                                    xMin: xMinOverride, xMax: xMaxOverride, xTicks, markers = false, ySteps = 4 }) {
     const withPoints = series.filter((s) => s.points && s.points.length);
     if (!withPoints.length) return emptyState(container);
     const allX = withPoints.flatMap((s) => s.points.map((p) => p.x));
@@ -144,7 +147,6 @@ const LWCharts = (() => {
     const sy = (y) => padT + h - (yMax ? (y / yMax) * h : 0);
 
     const children = [];
-    const ySteps = 4;
     for (let i = 0; i <= ySteps; i++) {
       const val = (yMax / ySteps) * i;
       const y = sy(val);

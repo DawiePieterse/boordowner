@@ -186,10 +186,17 @@ const LWMarketTab = (() => {
 
     const daily = _data.daily;
     const seasons = tickedSeasons();
-    const newest = seasons[seasons.length - 1];
     const several = seasons.length > 1;
     const metric = document.getElementById("marketMetric").value;
     const pts = tickedPoints();
+    // The weeks are labelled by the newest season ticked, but the solid line
+    // goes to the newest one with the farm's own sales on the chart: early
+    // in a season, before anything has sold, last season's lines shouldn't
+    // fade just because this season has a Joburg Market point.
+    const labelSeason = seasons[seasons.length - 1];
+    const plotted = seasons.filter((s) => pts.some((p) => p.season_year === s && p.pack_type === _pack
+                                                      && !_receiversOff.has(p.receiver)));
+    const newest = plotted.length ? plotted[plotted.length - 1] : labelSeason;
     const refPts = daily.reference.filter((r) => _seasonsOn.has(r.season_year));
     const a = daily.season_anchor;
     const anchorText = Boord.fmtDate(`2001-${pad(a.month)}-${pad(a.day)}`, { day: "numeric", month: "long" });
@@ -200,7 +207,7 @@ const LWMarketTab = (() => {
         ? `${s} so far from Boord Packhouse's delivery notes, priced from Boord's market invoices (or the typed statement)`
         : `${s}: no sales of the farm's own on file yet`));
     const notes = [sources.join("; ") + "."];
-    if (several) notes.push(`Seasons are laid over each other by day of season from ${anchorText}; the weeks shown are ${newest}'s, and earlier seasons are dotted.`);
+    if (several) notes.push(`Seasons are laid over each other by day of season from ${anchorText}; the weeks shown are ${labelSeason}'s, and earlier seasons are dotted.`);
     if (refPts.length) notes.push("The dashed line is Joburg Market's whole-market average price per unit sold and units sold, recorded daily.");
     else if (daily.reference.length) notes.push(`No Joburg Market line in these seasons: the market keeps no history, and this app has recorded it only since ${Boord.fmtDate(daily.reference[0].date)}.`);
     if (!_pack) notes.push("Tick a pack type to plot the farm's own sales.");
@@ -214,7 +221,7 @@ const LWMarketTab = (() => {
     const day = (iso) => `${Boord.fmtDate(iso, { weekday: "short", day: "numeric", month: "short", year: "numeric" })}`
       + ` (week ${isoWeek(dateOf(dayNo(iso)))})`;
     const lineStyle = (season) => ({
-      dash: season === newest ? "" : EARLIER_DASH, muted: season !== newest, emphasize: several && season === newest,
+      dash: season >= newest ? "" : EARLIER_DASH, muted: season < newest, emphasize: plotted.length > 1 && season === newest,
     });
 
     const series = [];
@@ -240,7 +247,7 @@ const LWMarketTab = (() => {
         if (!mine.length) return;
         series.push({
           label: several ? `${REF_LABEL} ${season}` : REF_LABEL, color: REF_COLOUR, dashed: true,
-          muted: season !== newest, marker: "circle", hollow: true,
+          muted: season < newest, marker: "circle", hollow: true,
           points: mine.map((r) => ({
             x: seasonDay(r), y: metric === "price" ? r.price : r.units,
             title: `${REF_LABEL} · ${season} season\n${day(r.date)}\n`
@@ -267,7 +274,7 @@ const LWMarketTab = (() => {
     // Week ticks from the newest season's own calendar, from the Monday the
     // earliest day falls in.
     const first = Math.min(...days), last = Math.max(...days);
-    const base = anchorDay(newest);
+    const base = anchorDay(labelSeason);
     const start = first - ((dateOf(base + first).getUTCDay() + 6) % 7);
     const ticks = [];
     let month = null;
@@ -280,7 +287,7 @@ const LWMarketTab = (() => {
       month = m;
     }
     LWCharts.lineChart(chart, {
-      series, xTicks: ticks, markers: true, xMin: start, xMax: last, minWidthPerPoint: 6, height: 300,
+      series, xTicks: ticks, markers: true, xMin: start, xMax: last, minWidthPerPoint: 6, height: 300, ySteps: 10,
       yLabel: metric === "price" ? (v) => `R${Math.round(v).toLocaleString(Boord.LOCALE)}`
                                  : (v) => Math.round(v).toLocaleString(Boord.LOCALE),
     });

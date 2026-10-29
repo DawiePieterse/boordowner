@@ -286,8 +286,14 @@ const LWMarketTab = (() => {
       ticks.push({ x, label: `Wk ${isoWeek(d)}`, sub: m !== month ? m : "" });
       month = m;
     }
+    // Zoomed on what is drawn: 50 (rand or cartons) below the lowest value
+    // and 50 above the highest, never below 0 - so a season whose prices sit
+    // between R200 and R300 fills the chart instead of a band of a 0-R1 000
+    // axis. It re-zooms as lines are ticked on and off.
+    const ys = series.flatMap((s) => s.points.map((p) => p.y));
+    const yDomain = [Math.max(0, Math.min(...ys) - 50), Math.max(...ys) + 50];
     LWCharts.lineChart(chart, {
-      series, xTicks: ticks, markers: true, xMin: start, xMax: last, minWidthPerPoint: 6, height: 300, ySteps: 10,
+      series, xTicks: ticks, markers: true, xMin: start, xMax: last, minWidthPerPoint: 6, height: 300, ySteps: 10, yDomain,
       yLabel: metric === "price" ? (v) => `R${Math.round(v).toLocaleString(Boord.LOCALE)}`
                                  : (v) => Math.round(v).toLocaleString(Boord.LOCALE),
     });

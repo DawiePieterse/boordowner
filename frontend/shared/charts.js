@@ -128,25 +128,43 @@ const LWCharts = (() => {
   // Markets tab: week numbers, the month under the first week of each).
   // markers: a dot per point carrying its own `title` (or the series label)
   // on hover - for sparse data, where a line alone hides which days had any.
+  // ySteps: how many intervals the y-axis is split into. niceMax() rounds
+  // the top to 1, 2 or 5 x 10^n, so 10 steps still lands on round values
+  // (R0, R100 ... R1 000).
+  // yDomain: [low, high] - the y-axis spans exactly that instead of 0 to a
+  // rounded-up maximum, zoomed on the data. Its gridlines then sit on round
+  // multiples of a 1/2/5 x 10^n step chosen for about ySteps of them, so
+  // the edges themselves need not be round.
   function lineChart(container, { series, xLabel = (x) => x, yLabel = (y) => y, height = 260, minWidthPerPoint = 3,
-                                    xMin: xMinOverride, xMax: xMaxOverride, xTicks, markers = false }) {
+                                    xMin: xMinOverride, xMax: xMaxOverride, xTicks, markers = false, ySteps = 4,
+                                    yDomain }) {
     const withPoints = series.filter((s) => s.points && s.points.length);
     if (!withPoints.length) return emptyState(container);
     const allX = withPoints.flatMap((s) => s.points.map((p) => p.x));
     const allY = withPoints.flatMap((s) => s.points.map((p) => p.y));
     const xMin = xMinOverride != null ? Math.min(xMinOverride, ...allX) : Math.min(...allX);
     const xMax = xMaxOverride != null ? Math.max(xMaxOverride, ...allX) : Math.max(...allX);
-    const yMax = niceMax(Math.max(...allY, 0));
+    let yLo = 0, yHi = niceMax(Math.max(...allY, 0)), yTicks;
+    if (yDomain) {
+      [yLo, yHi] = yDomain;
+      if (!(yHi > yLo)) yHi = yLo + 1;
+      const raw = (yHi - yLo) / ySteps;
+      const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+      const norm = raw / mag;
+      const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+      yTicks = [];
+      for (let k = Math.ceil(yLo / step - 1e-9); k * step <= yHi + 1e-9; k++) yTicks.push(k * step);
+    } else {
+      yTicks = Array.from({ length: ySteps + 1 }, (_, i) => (yHi / ySteps) * i);
+    }
     const padL = 62, padB = xTicks ? 42 : 26, padT = 12, padR = 16;
     const width = Math.max(420, Math.min(1400, (xMax - xMin + 1) * minWidthPerPoint + padL + padR));
     const w = width - padL - padR, h = height - padT - padB;
     const sx = (x) => padL + (xMax > xMin ? ((x - xMin) / (xMax - xMin)) * w : w / 2);
-    const sy = (y) => padT + h - (yMax ? (y / yMax) * h : 0);
+    const sy = (y) => padT + h - (yHi > yLo ? ((y - yLo) / (yHi - yLo)) * h : 0);
 
     const children = [];
-    const ySteps = 4;
-    for (let i = 0; i <= ySteps; i++) {
-      const val = (yMax / ySteps) * i;
+    for (const val of yTicks) {
       const y = sy(val);
       children.push(svg("line", { x1: padL, x2: padL + w, y1: y, y2: y, stroke: "#e2e8f0", "stroke-width": 1 }));
       children.push(text(padL - 8, y + 4, yLabel(val), { "text-anchor": "end", fill: "#64748b", style: "font-size:12px" }));

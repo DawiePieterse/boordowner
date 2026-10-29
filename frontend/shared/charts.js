@@ -76,7 +76,50 @@ const LWCharts = (() => {
     return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6 ? "#1e293b" : "#ffffff";
   }
 
-  // series: [{label, color, points:[{x,y,title}], emphasize, dashed, muted}]
+  // A point marker: a filled (or, `hollow`, outlined) shape centred on
+  // cx,cy - so lines still tell apart once printed in black and white,
+  // where their colours don't. Shapes: circle, square, diamond, triangle,
+  // triangle-down, plus, cross, star, pentagon, hexagon.
+  const MARKER_SHAPES = ["circle", "square", "triangle", "diamond", "triangle-down", "plus", "cross", "star",
+                         "pentagon", "hexagon"];
+  function marker(shape, cx, cy, r, color, { hollow = false, opacity = 1, title } = {}) {
+    const ring = (n, rot, radius = r) => Array.from({ length: n }, (_, i) => {
+      const a = rot + (i * 2 * Math.PI) / n;
+      return [cx + radius * Math.cos(a), cy + radius * Math.sin(a)];
+    });
+    let pts = null;
+    if (shape === "square") pts = ring(4, Math.PI / 4, r * 1.2);
+    else if (shape === "diamond") pts = ring(4, -Math.PI / 2, r * 1.3);
+    else if (shape === "triangle") pts = ring(3, -Math.PI / 2, r * 1.35);
+    else if (shape === "triangle-down") pts = ring(3, Math.PI / 2, r * 1.35);
+    else if (shape === "pentagon") pts = ring(5, -Math.PI / 2, r * 1.15);
+    else if (shape === "hexagon") pts = ring(6, 0, r * 1.15);
+    else if (shape === "star") {
+      pts = ring(10, -Math.PI / 2, r * 1.5).map(([x, y], i) => (i % 2
+        ? [cx + (x - cx) * 0.45, cy + (y - cy) * 0.45] : [x, y]));
+    } else if (shape === "plus" || shape === "cross") {
+      const w = r * 0.45, l = r * 1.3;
+      pts = [[-w, -l], [w, -l], [w, -w], [l, -w], [l, w], [w, w], [w, l], [-w, l], [-w, w], [-l, w], [-l, -w], [-w, -w]];
+      if (shape === "cross") {
+        const c = Math.SQRT1_2;
+        pts = pts.map(([x, y]) => [(x - y) * c, (x + y) * c]);
+      }
+      pts = pts.map(([x, y]) => [cx + x, cy + y]);
+    }
+    const style = hollow ? { fill: "#ffffff", stroke: color, "stroke-width": 1.6 } : { fill: color };
+    const el = pts
+      ? svg("polygon", { points: pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" "), ...style, opacity })
+      : svg("circle", { cx, cy, r, ...style, opacity });
+    if (title) {
+      const t = svg("title");
+      t.textContent = title;
+      el.appendChild(t);
+    }
+    return el;
+  }
+
+  // series: [{label, color, points:[{x,y,title}], emphasize, dashed, dash, muted, marker, hollow}]
+  // `dash` is an SVG dash pattern ("1,4" dotted) and wins over `dashed`.
   // xMin/xMax force the plotted domain (e.g. pinning every chart to the
   // same "starts 1 Aug" left edge) instead of fitting to whichever series
   // happens to have the earliest/latest point.
@@ -132,13 +175,12 @@ const LWCharts = (() => {
       titleEl.textContent = s.label;
       children.push(svg("path", {
         d, fill: "none", stroke: s.color, "stroke-width": s.emphasize ? 3 : 1.5,
-        "stroke-dasharray": s.dashed ? "5,4" : "", opacity: s.muted ? 0.55 : 1,
+        "stroke-dasharray": s.dash || (s.dashed ? "5,4" : ""), opacity: s.muted ? 0.55 : 1,
       }, [titleEl]));
       if (markers) {
         s.points.forEach((p) => {
-          const tip = svg("title");
-          tip.textContent = p.title || s.label;
-          children.push(svg("circle", { cx: sx(p.x), cy: sy(p.y), r: 3.5, fill: s.color }, [tip]));
+          children.push(marker(s.marker || "circle", sx(p.x), sy(p.y), 3.5, s.color,
+                               { hollow: s.hollow, opacity: s.muted ? 0.7 : 1, title: p.title || s.label }));
         });
       } else if (s.emphasize) {
         const last = s.points[s.points.length - 1];
@@ -576,9 +618,27 @@ const LWCharts = (() => {
                                        preserveAspectRatio: "none" }, children));
   }
 
+  // A legend swatch drawn the way lineChart() draws the series: its dash and
+  // its marker shape, so a black-and-white print still matches them up.
+  function swatch(it) {
+    const s = svg("svg", { width: 28, height: 14, viewBox: "0 0 28 14", style: "flex-shrink:0" }, [
+      svg("line", { x1: 1, x2: 27, y1: 7, y2: 7, stroke: it.color, "stroke-width": it.emphasize ? 3 : 2,
+                    "stroke-dasharray": it.dash || (it.dashed ? "5,4" : ""), opacity: it.muted ? 0.55 : 1 }),
+      ...(it.marker ? [marker(it.marker, 14, 7, 4, it.color, { hollow: it.hollow, opacity: it.muted ? 0.7 : 1 })] : []),
+    ]);
+    return s.outerHTML;
+  }
+
   function legend(container, items) {
-    // items: [{label, color, dashed}]. Labels can be variety names typed in
+    // items: [{label, color, dashed}] - plus, for marker charts, {marker,
+    // hollow, dash, muted, emphasize}. Labels can be variety names typed in
     // Boord, so they are escaped.
+    if (items.some((it) => it.marker || it.dash)) {
+      container.innerHTML = items.map((it) => `
+        <span class="inline-flex items-center gap-1 text-xs text-slate-600 mr-3">${swatch(it)}${Boord.escapeHtml(it.label)}</span>
+      `).join("");
+      return;
+    }
     container.innerHTML = items.map((it) => `
       <span class="inline-flex items-center gap-1.5 text-xs text-slate-600 mr-3">
         <span style="display:inline-block;width:14px;height:${it.dashed ? "0" : "3px"};margin-top:${it.dashed ? "1px" : "0"};border-top:${it.dashed ? "2px dashed " + it.color : "3px solid " + it.color}"></span>
@@ -705,5 +765,5 @@ const LWCharts = (() => {
     pdf.save(filename);
   }
 
-  return { lineChart, dualAxisLineChart, barChart, stackedBarChart, heatmap, bubbleMatrix, rangeBarChart, sparkline, legend, emptyState, loadingState, bindPdfButtons, exportPDF, PALETTE };
+  return { lineChart, dualAxisLineChart, barChart, stackedBarChart, heatmap, bubbleMatrix, rangeBarChart, sparkline, legend, swatch, emptyState, loadingState, bindPdfButtons, exportPDF, PALETTE, MARKER_SHAPES };
 })();

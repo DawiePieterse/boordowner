@@ -251,7 +251,6 @@ def _highlights(selected: dict, record: dict, current_year: int, forecast: Optio
 def build_weather_summary(owner: Session, boord: Session, years: list, metrics: list, today: date) -> dict:
     """Everything the model is told, as JSON-ready data, plus "_check" - the
     years it may fairly name (the browser flags an answer naming any other)."""
-    coords = farm_coords_and_release(boord)   # Boord is let go before any network call
     all_years = _years_on_file(owner)
     current_year = today.year
 
@@ -259,7 +258,13 @@ def build_weather_summary(owner: Session, boord: Session, years: list, metrics: 
     on_file = set(all_years)
     chosen = sorted({y for y in years if y in on_file})[-MAX_YEARS:] or all_years[-1:]
 
+    # The Weather tab's own history build reads Boord too (the farm's
+    # location, for its hours-elsewhere count), so it runs BEFORE Boord is
+    # let go - the release used to come first, and this re-opened the
+    # connection behind it, so the forecast fetch below ran with Boord's
+    # file open after all. Everything that needs Boord is above this line.
     history = build_weather_history(owner, boord, years=chosen) if chosen else {"points": [], "last_synced": None}
+    coords = farm_coords_and_release(boord)   # Boord is let go before any network call
     by_year = defaultdict(list)
     for p in history["points"]:
         by_year[p["year"]].append(p)

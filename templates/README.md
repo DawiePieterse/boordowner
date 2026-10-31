@@ -16,7 +16,7 @@ afterwards.
 | `block_id` | yes | Must match an `id` from `blocks.csv`. Import blocks first, or the rows load but nothing lines them up with an orchard. |
 | `date` | yes | The day the fruit was picked. `2024-11-18` is safest; `18/11/2024` is also read as day-first. |
 | `kg` | yes | Kilograms picked from that block on that day. |
-| `season_year` | no | Which season the day belongs to. Taken from `date` when blank, which is right unless a season straddles New Year. |
+| `season_year` | no | Which season the day belongs to. Worked out from `date` when blank, by the season start set in Boord's Settings (`season_start_month`/`_day`) - so a January pick on a farm whose season starts in August lands in the season that began the August before, not in its own calendar year. Fill it in yourself if your seasons are labelled differently. |
 | `estimated` | no | `true` marks a figure that was worked out rather than recorded — most often an old combined block total divided between today's sub-blocks. Reports carry the flag through so an estimate is never mistaken for a measurement. |
 
 **Splitting old blocks is your call, not the app's.** If the historical

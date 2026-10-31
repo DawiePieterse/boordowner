@@ -35,6 +35,21 @@ def _write_packaging(names):
     conn.close()
 
 
+def test_market_summary_survives_an_unreadable_packhouse_db(client):
+    """A packhouse.db that exists but is not a database yet (Packhouse's
+    installer made the file, nothing has migrated it). sqlite3 raises
+    DatabaseError there, not OperationalError - the Markets tab (and the
+    Estimate tab, which reads the same lists) must still answer."""
+    with open(config.PACKHOUSE_DB_PATH, "wb") as fh:
+        fh.write(b"not a database at all")
+    try:
+        m = _market(client)
+        assert m["daily"]["packs"] == [] and m["daily"]["receivers"] == []
+        assert client.get("/api/estimate").status_code == 200
+    finally:
+        os.remove(config.PACKHOUSE_DB_PATH)
+
+
 def test_market_summary_empty_when_nothing_imported(client):
     """Nothing imported, no packhouse.db, and the fake Boord has no Markets &
     Transport tables (an older Boord) - every part empty, never a 500."""

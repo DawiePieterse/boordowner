@@ -213,6 +213,58 @@ def test_historical_harvest_import_replaces_the_table(client):
     assert len(rows) == 1 and rows[0].season_year == 2022  # derived from the date
 
 
+def test_historical_import_derives_the_season_from_boords_anchor(client):
+    """A season that straddles New Year (the fixture farm's starts 1 August):
+    a January pick belongs to the season that began the previous August, not
+    to the calendar year it was picked in. Taking season_year from the date's
+    own year put every January row in a season of its own, which the Analysis
+    tab then drew as a second season starting on a negative season day."""
+    r = client.post("/api/historical-harvest/import",
+                    files=_csv("block_id,date,kg\n7,2021-12-20,100\n7,2022-01-10,50\n7,2022-09-01,10\n"))
+    assert r.status_code == 200 and r.json()["imported"] == 3
+    assert r.json()["seasons"] == [2021, 2022]
+    with Session(owner_engine) as s:
+        rows = {r.harvest_date.isoformat(): r.season_year for r in s.exec(select(HistoricalHarvest)).all()}
+    assert rows == {"2021-12-20": 2021, "2022-01-10": 2021, "2022-09-01": 2022}
+    # A season_year column, when present, is taken as given.
+    r = client.post("/api/historical-harvest/import",
+                    files=_csv("block_id,date,kg,season_year\n7,2022-01-10,50,2019\n"))
+    assert r.status_code == 200
+    with Session(owner_engine) as s:
+        assert s.exec(select(HistoricalHarvest)).one().season_year == 2019
+
+
+def test_historical_import_reads_a_windows_encoded_csv(client):
+    """Excel on Windows saves a plain CSV in cp1252, not UTF-8. A block name
+    or note with an accent then failed to decode and the import answered 500
+    with no word to the owner."""
+    body = "block_id,date,kg\nHo\u00ebveld,2021-10-01,5\n7,2021-10-02,6\n".encode("cp1252")
+    r = client.post("/api/historical-harvest/import",
+                    files={"file": ("history.csv", io.BytesIO(body), "text/csv")})
+    assert r.status_code == 200, r.text
+    assert r.json()["imported"] == 2
+    with Session(owner_engine) as s:
+        assert {r.block_id for r in s.exec(select(HistoricalHarvest)).all()} == {"Ho\u00ebveld", "7"}
+
+
+def test_historical_import_refuses_an_empty_workbook(client):
+    """An .xlsx with no rows at all (a blank sheet) used to raise on reading
+    its header row - a 500 - instead of the same 400 a headings-only CSV
+    gets, and nothing may be wiped by it."""
+    import openpyxl
+    client.post("/api/historical-harvest/import",
+                files=_csv("block_id,date,kg\n7,2021-10-01,100\n"))
+    wb = openpyxl.Workbook()
+    buf = io.BytesIO()
+    wb.save(buf)
+    r = client.post("/api/historical-harvest/import",
+                    files={"file": ("history.xlsx", io.BytesIO(buf.getvalue()),
+                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert r.status_code == 400 and "no data rows" in r.json()["detail"]
+    with Session(owner_engine) as s:
+        assert len(s.exec(select(HistoricalHarvest)).all()) == 1
+
+
 def test_historical_import_refuses_a_headings_only_file(client):
     client.post("/api/historical-harvest/import",
                 files=_csv("block_id,date,kg\n7,2021-10-01,100\n"))

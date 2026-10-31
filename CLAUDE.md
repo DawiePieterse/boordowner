@@ -30,6 +30,7 @@ This app is one of seven that run together on the farm PC (`bekfontein-server`),
   - Owner, Labour and Packhouse refuse to boot if a column they read disappears. A Boord migration that drops or renames a column needs those apps updated in step.
 - **Owner also reads Packhouse.** For the Dashboard's Delivered vs Picked card, Owner opens Packhouse's `data/packhouse.db` read-only, the same way Boord's own admin dashboard does (delivery notes are Packhouse's data, not Boord's). Optional: missing or unreadable just drops that one figure.
 - **Labour's badges are Boord's.** The badge QR holds exactly `worker.id` (`Boord/frontend/admin/print-badge.html`), and Labour and Packhouse vendor Boord's `frontend/shared/`.
+- **Boord reads Owner and Packhouse.** The Admin Planner (Boord 3.50) opens Owner's `data/owner.db` read-only for the season's latest estimate, and Packhouse's `data/packhouse.db` for receivers, packs and delivery notes (Boord's Reports and Dashboard already read the latter). Optional: a missing database drops those figures with a message, never the screen. Owner's `yieldestimate`/`yieldestimateblock` and Packhouse's `receiver`, `packaging` and `deliverynote` columns it reads must stay.
 - **Owner asks Notes.** The "Ask the farm notes" bridge calls Notes' `/api/ai/ask` at `OWNER_NOTES_URL` (`http://127.0.0.1:8020`) and can share Notes' `data/anthropic_key.txt`.
 - **Monitor keeps the others running.** Since Monitor 2.0 its `watchdog.ps1` (restarts an app that stops answering) and `heartbeat.ps1` (pings healthchecks.io) cover all seven, as the scheduled tasks "Boord Watchdog" and "Boord Heartbeat". Until then they lived in Boord's repo; Boord's copies are now forwarders to Monitor's.
   - **The app table is Monitor's `apps.json`, the one copy.** Monitor's `backend/apps.py`, `watchdog.ps1` and `heartbeat.ps1` all read it. Adding or moving an app is one line there plus the port table above; the `tailscale serve` ports are also in Boord's MANUAL.md.
@@ -154,11 +155,22 @@ Merging to `main` changes nothing on the farm. A release is a signed tag, and th
    scripts/ship.sh vX.Y        # signs, verifies and pushes the tag
    ```
    `ship.sh` pushes `main`, then runs `release.sh`, which refuses a dirty tree, an existing tag, or a `VERSION` that disagrees with the tag, and verifies the signature before anything is pushed. Both ask before anything irreversible, so run them in a terminal.
+   Or, as one non-interactive command with the same checks: `scripts/deploy.sh vX.Y`. That is what "deploy" runs (see the section below).
    Never move or reuse a released tag. Fix a wrong one with the next version.
 4. **On the farm PC**, in `C:\BoordOwner`, double-click **`update_owner_server.bat`**. It verifies the signature, stops the server with `stop_server.ps1`, installs dependencies, copies and migrates the database, and starts it again. If it stops with an error, nothing has changed. Read the message; never check the tag out by hand.
 5. **If the release changed `install.ps1`** (its notes say "run install.bat once more"), double-click `install.bat` as well. The updater does not rewrite the launcher or the task.
 6. **Check from your Mac:** `curl -s https://bekfontein-server.taile32cb0.ts.net:8443/api/version` should show `"tag":"vX.Y","state":"release"`.
 7. **Close and reopen the app on the owner's phone so it loads the new version.**
+
+## When the user says "deploy"
+
+"Deploy" is explicit permission to release this app: sign the tag and push it to GitHub, without asking again. The release key lives only on the owner's Mac, so the signing step runs there and nowhere else.
+
+1. Before anything: the tests must pass: `cd backend && .venv/bin/python -m pytest -q` (there is no CI). `VERSION` in `frontend/shared/api.js` must already be the version being released, and if any frontend file changed since the last tag the service-worker `CACHE` must have been bumped with it. Fix and commit first if not; `deploy.sh` refuses otherwise.
+2. On the Mac, run `scripts/deploy.sh vX.Y`. It asks nothing except GnuPG's passphrase prompt. It stops at the first of these that fails and changes nothing: tag not shaped like `vX.Y`; tree not clean; not on `main`; `main` not fast-forwardable from origin; `VERSION` not equal to the tag; tag already existing locally or on origin; release key absent. Then it pushes `main` if ahead, signs the tag, verifies the signature is the release key's (and deletes the tag if not), pushes the tag, and prints the farm PC steps.
+3. Report the tag and remind the owner: run the updater on the farm PC (and `install.bat` if the release changed `install.ps1`), then fully close and reopen the app on every phone and tablet.
+
+In a session without the key (Claude Code on the web, any cloud container), do step 1, then hand over the `scripts/deploy.sh vX.Y` command to run on the Mac. Never push an unsigned tag: the updater picks the newest `v*` tag and stops when its signature fails, which blocks this app's updates on the farm PC until a higher signed tag lands. `deploy.sh` is the same file in every Boord repo apart from the configuration block at its top; a fix to it flows to all seven.
 
 ## Conventions
 

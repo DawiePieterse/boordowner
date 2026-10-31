@@ -193,13 +193,13 @@ class SeasonBrief(SQLModel, table=True):
 
 class MarketPackPrice(SQLModel, table=True):
     """One buyer's line for one pack type, from a season's hand-kept
-    litchi "Markte" market-statement workbook's own '<year> Totaal' sheet
-    (scripts/import_market_prices.py) - what the fruit actually made per
+    litchi "Markte" market-statement workbook (scripts/import_market_prices.py):
+    its own '<year> Totaal' sheet, or for 2022 and 2023, which have none,
+    added up from its per-receiver sheets - what the fruit actually made per
     carton, by pack type, the figure the Estimate tab's pack-out mix
     (kg_per_carton) has no way to see since that is a weight, not a price.
-    Never written to by the app itself; re-running the import REPLACES
-    the season(s) the workbook it was given has a Totaal sheet for, same
-    as HistoricalHarvest."""
+    Never written to by the app itself; re-running the import REPLACES the
+    workbook's own season, same as HistoricalHarvest."""
     id: Optional[int] = Field(default=None, primary_key=True)
     season_year: int = Field(index=True)
     buyer: str = ""          # e.g. "AgriLink 2kg Lug", "Dapper"

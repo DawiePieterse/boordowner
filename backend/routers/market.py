@@ -56,11 +56,19 @@ def _packhouse_rows(sql: str, params: tuple = ()) -> list:
     installed here or hasn't made the table yet."""
     if not os.path.exists(config.PACKHOUSE_DB_PATH):
         return []
-    conn = sqlite3.connect(f"file:{config.PACKHOUSE_DB_PATH}?mode=ro", uri=True, timeout=10)
+    # sqlite3.Error, not just OperationalError: a file that exists but is
+    # not a database yet (Packhouse installed, nothing migrated; or mid-copy)
+    # raises DatabaseError from connect() or the first statement - and this
+    # is read by the Estimate tab as well as the Markets tab, neither of
+    # which may fall over for an optional list. See dashboard._delivered_kg.
+    try:
+        conn = sqlite3.connect(f"file:{config.PACKHOUSE_DB_PATH}?mode=ro", uri=True, timeout=10)
+    except sqlite3.Error:
+        return []
     conn.row_factory = sqlite3.Row
     try:
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
-    except sqlite3.OperationalError:
+    except sqlite3.Error:
         return []
     finally:
         conn.close()

@@ -146,16 +146,28 @@ def _delivered_kg(period_start: date, period_end: date, supplier_id: Optional[in
     routers/dashboard.py:_delivered_kg / routers/reports.py:_pallet_stats."""
     if supplier_id is not None or not os.path.exists(config.PACKHOUSE_DB_PATH):
         return None
-    conn = sqlite3.connect(f"file:{config.PACKHOUSE_DB_PATH}?mode=ro", uri=True, timeout=10)
+    # sqlite3.Error, not just OperationalError: a packhouse.db that exists
+    # but is not a database yet (Packhouse's installer has made the file and
+    # nothing has migrated it, or it is mid-copy) raises DatabaseError from
+    # connect() or the first statement, and that took the whole dashboard
+    # down with a 500 for a card that is optional by design.
+    try:
+        conn = sqlite3.connect(f"file:{config.PACKHOUSE_DB_PATH}?mode=ro", uri=True, timeout=10)
+    except sqlite3.Error:
+        return None
     conn.row_factory = sqlite3.Row
     try:
         notes = conn.execute(
             "SELECT pallets FROM deliverynote WHERE removed = 0 AND loaded_on >= ? AND loaded_on <= ?",
             (period_start.isoformat(), period_end.isoformat())).fetchall()
-    except sqlite3.OperationalError:
+    except sqlite3.Error:
         return None
     finally:
         conn.close()
-    kg = sum(ln.get("cartons", 0) * ln.get("carton_kg", 0)
+    # `or 0`, not a .get() default: a pallet line Packhouse saved without a
+    # carton weight (a pack with none set yet) is NULL in the JSON, and
+    # None * 10 is a TypeError. It counts as 0 kg, as Packhouse's own
+    # delivery figures count it.
+    kg = sum((ln.get("cartons") or 0) * (ln.get("carton_kg") or 0)
              for n in notes for p in json.loads(n["pallets"] or "[]") for ln in p.get("lines", []))
     return round(kg, 1)

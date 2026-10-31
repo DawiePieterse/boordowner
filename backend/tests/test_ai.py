@@ -370,6 +370,30 @@ def test_weather_ask_sends_the_record_and_the_forecast(client, gemini, weather_r
     assert any("Forecast nights at or below" in h for h in s["highlights"])
 
 
+def test_weather_ask_lets_boord_go_before_the_forecast_fetch(client, gemini, weather_record, monkeypatch):
+    """The summary reads Boord twice (the coordinates, then the farm's
+    location again inside the Weather tab's own history build). Both reads
+    must be over, and the connection closed, before the forecast request
+    goes out - the rule every other Open-Meteo call site keeps."""
+    from datetime import date
+    from routers import ai_weather
+    seen = {}
+    counter = _OpenConnectionCounter(boord_engine).__enter__()
+
+    def fake_forecast(lat, lon, days=8, timeout=15):
+        seen["live_during_fetch"] = counter.live
+        return _forecast_payload(date.today())
+    monkeypatch.setattr(ai_weather, "fetch_forecast_hourly", fake_forecast)
+    monkeypatch.setattr(ai_weather, "fetch_weather_cached", lambda lat, lon: {})
+    monkeypatch.setattr(ai, "_post_stream", lambda url, headers, body: iter(_gemini_sse("ok")))
+    try:
+        r = client.post("/api/ai/ask", json={"tab": "weather", "question": "Will it rain?"})
+    finally:
+        counter.__exit__()
+    assert r.status_code == 200
+    assert seen["live_during_fetch"] == 0
+
+
 def test_weather_ask_survives_an_unreachable_forecast(client, gemini, weather_record, monkeypatch):
     from routers import ai_weather
 

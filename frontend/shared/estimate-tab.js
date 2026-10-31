@@ -219,6 +219,16 @@ const LWEstimateTab = (() => {
       data = await Boord.api(`/api/estimate?${qs}`, { timeoutMs: 30000 });
     } catch (e) {
       if (seq !== _loadSeq) return;
+      if (e.status === 404 && _estimateId != null) {
+        // The version this device was showing is gone - deleted on another
+        // phone or laptop (every device on the tailnet shares the list).
+        // Asking for it again would 404 on every tab tap and pull-to-refresh
+        // and leave the tab stuck behind the toast below, so fall back to
+        // the server's own pick for the season, once.
+        _estimateId = null;
+        Boord.toast("That version is no longer on the server - showing the latest one");
+        return load({ force: true, soft });
+      }
       console.error("Estimate load failed:", e);
       Boord.toast("Could not load the estimate");
       return;

@@ -105,6 +105,37 @@ def test_delivered_vs_picked_missing_db_is_none(client):
     assert body["delivered_kg"] is None
 
 
+def test_delivered_vs_picked_tolerates_a_line_without_a_weight(client):
+    # A pallet line Packhouse saved without a carton weight (its pack had
+    # none yet) is NULL in the note's JSON. None * 10 raised a TypeError that
+    # took the whole dashboard down with a 500; the line counts as 0 kg.
+    pallets = json.dumps([{"lines": [{"cartons": 10, "carton_kg": None},
+                                     {"cartons": None, "carton_kg": 4.5},
+                                     {"cartons": 10, "carton_kg": 4.5}]}])
+    _write_packhouse_db([("2026-06-15", pallets)])
+    try:
+        r = client.get(f"/api/dashboard/summary?{_RANGE}")
+        assert r.status_code == 200
+        assert r.json()["delivered_kg"] == 45.0
+    finally:
+        os.remove(config.PACKHOUSE_DB_PATH)
+
+
+def test_delivered_vs_picked_unreadable_db_is_none(client):
+    # A packhouse.db that exists but is not (yet) a database - Packhouse's
+    # installer has made the file but not migrated it, or it is mid-copy.
+    # sqlite3 raises DatabaseError, not OperationalError, for that, and the
+    # rest of the dashboard must still load.
+    with open(config.PACKHOUSE_DB_PATH, "wb") as fh:
+        fh.write(b"not a database at all")
+    try:
+        r = client.get(f"/api/dashboard/summary?{_RANGE}")
+        assert r.status_code == 200
+        assert r.json()["delivered_kg"] is None
+    finally:
+        os.remove(config.PACKHOUSE_DB_PATH)
+
+
 def test_delivered_vs_picked_is_none_for_a_supplier(client):
     # A delivery note keeps only its pallets' supplier names, not one
     # grower - so the card can't be filtered and says so instead.

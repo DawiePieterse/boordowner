@@ -32,9 +32,11 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy import func
 from sqlmodel import Session, delete, select
 
-from db import get_owner_session
+from db import get_boord_session, get_owner_session
 from excel_io import parse_uploaded_table
+from models_boord import SystemSetting
 from models_owner import HistoricalAnnualYield, HistoricalHarvest
+from timeutil import season_year_for
 
 router = APIRouter(prefix="/api", tags=["historical"])
 
@@ -124,16 +126,33 @@ def _check_usable(rows: list, kept: int, rejected: list) -> None:
                                   f"file or the wrong columns. Nothing was changed.")
 
 
+def _season_anchor(boord: Session) -> tuple:
+    """Boord's season start (month, day) - the one definition of which
+    season a date belongs to, shared with routers/analysis.py. Boord's own
+    default of 1 January means "the calendar year". The read is over before
+    anything is written, and the session let go."""
+    settings = boord.exec(select(SystemSetting)).first()
+    anchor = (settings.season_start_month, settings.season_start_day) if settings else (1, 1)
+    boord.close()
+    return anchor
+
+
 @router.post("/historical-harvest/import")
-async def import_historical_harvest(file: UploadFile, owner: Session = Depends(get_owner_session)):
+async def import_historical_harvest(file: UploadFile, owner: Session = Depends(get_owner_session),
+                                    boord: Session = Depends(get_boord_session)):
     """Daily per-block kg from seasons before the app existed.
 
     Columns: block_id, date, kg, and optionally season_year and estimated.
-    season_year is derived from the date when absent - these are calendar
-    dates within one picking season, and the daily table has always stored
-    the two together (see models.HistoricalHarvest).
+    season_year is derived from the date when absent - by Boord's season
+    anchor (timeutil.season_year_for), not the date's own calendar year. A
+    litchi season crosses New Year: on a farm whose season starts in August,
+    a pick on 10 January 2022 belongs to season 2021, and filing it under
+    2022 gave the Analysis tab a second "season" whose picking started on a
+    negative season day. The daily table has always stored date and season
+    together (see models.HistoricalHarvest).
     """
     rows = await parse_uploaded_table(file)
+    anchor_month, anchor_day = _season_anchor(boord)
     records, rejected = [], []
     for i, r in enumerate(rows, start=2):  # +2: header row, and 1-based
         try:
@@ -146,7 +165,8 @@ async def import_historical_harvest(file: UploadFile, owner: Session = Depends(g
             records.append(HistoricalHarvest(
                 block_id=str(block_id).strip(),
                 harvest_date=harvest_date,
-                season_year=int(season) if season is not None else harvest_date.year,
+                season_year=(int(season) if season is not None
+                             else season_year_for(harvest_date, anchor_month, anchor_day)),
                 kg=float(kg),
                 estimated=_parse_bool(_first(r, "estimated") or False),
             ))

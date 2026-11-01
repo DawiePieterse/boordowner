@@ -121,11 +121,24 @@ SKIP_SHEETS = {
 
 # What the office should know about a whole sheet's prices, written into
 # each of its rows' Note. AgriLink's sea loads are never paid in full by
-# the time the workbook is closed, and no season's sheet says which price
-# it holds.
+# the time the workbook is closed, and the sheet doesn't say which price it
+# holds. 2022's is settled: its sea sheet's R336-R360 a carton, the higher
+# of the two figures the workbook has, is the one to use (the owner's call),
+# not the R87.63 advance on its payments sheet - which is also why the
+# combined "AgriLink" sheet is in SKIP_SHEETS.
 SHEET_NOTES = {
-    (2022, "AgriLink See"): "Sea: R336-R360 here, but the payments sheet only has the R87.63 advance. Final?",
     (2025, "AgriLink USA See"): "Sea: R78-R84, likely the advance; the 2025 Totaal leaves sea blank. Final?",
+}
+
+# Datum typos worked out from the delivery notes either side, by season and
+# delivery note: the notes are numbered in the order they were written, so a
+# note between two dated ones went out between their dates, and each typo
+# kept enough of its day to place it.
+#   2023 note 922 (Dapper, "26/09/202"): 920 went on 20 Sep, 923 on 26 Sep.
+#   2023 note 965 (BoereTrust, "20/14//2023"): 964 went on 20 Nov, 966 on 21 Nov.
+DATE_FIXES = {
+    (2023, "922"): (date(2023, 9, 26), "notes 920 and 923"),
+    (2023, "965"): (date(2023, 11, 20), "notes 964 and 966"),
 }
 
 _PACK_RENAMES = {k.lower(): v for k, v in PACK_RENAMES.items()}
@@ -208,7 +221,7 @@ def _layout(ws):
 def sheet_rows(ws, season: int) -> list:
     """A per-receiver sheet's priced lines as dicts, one per pack type per
     row: season, date, receiver, note_no, pack_type, cartons, price, sheet,
-    note. The receiver is the sheet's own name (RECEIVER_RENAMES), or each
+    source (for the From column), note. The receiver is the sheet's own name (RECEIVER_RENAMES), or each
     row's MARK for a sheet that holds several (MIXED_SHEETS).
 
     A row with no Datum is one of two things. Where the office put a second
@@ -217,7 +230,8 @@ def sheet_rows(ws, season: int) -> list:
     the sheet - its cartons equal everything above it, pack type by pack
     type - it is the totals row, and is passed over; so is any blank-dated
     row before the first delivery (the 2024 sheets' summary line at the
-    top). A row whose Datum is a typo rather than a date ("26/09/202") gets
+    top). A row whose Datum is a typo rather than a date ("26/09/202") takes
+    its date from DATE_FIXES, its From column saying so; one not there gets
     no date and a Note saying what was typed, for the office to fill in."""
     layout = _layout(ws)
     if not layout:
@@ -252,10 +266,15 @@ def sheet_rows(ws, season: int) -> list:
             running[pack] += sold
         sale_date, who, note_no, typed = last
         notes = [SHEET_NOTES[(season, title)]] if (season, title) in SHEET_NOTES else []
-        if sale_date is None:
+        source = f"{season} workbook, {title}"
+        if sale_date is None and (season, note_no) in DATE_FIXES:
+            sale_date, between = DATE_FIXES[(season, note_no)]
+            source += f"; Datum typed {typed!r}, date from {between}"
+        elif sale_date is None:
             notes.insert(0, f"Datum typed as {typed!r}: fill in the date.")
         out += [{"season": season, "date": sale_date, "receiver": who, "note_no": note_no,
-                 "pack_type": pack, "cartons": sold, "price": price, "sheet": title, "note": " ".join(notes)}
+                 "pack_type": pack, "cartons": sold, "price": price, "sheet": title, "source": source,
+                 "note": " ".join(notes)}
                 for pack, sold, price in lines]
     return out
 
@@ -298,7 +317,7 @@ def write_history(rows: list, out_path: str) -> None:
     _header(ws, SALES_COLUMNS)
     for r in rows:
         ws.append([r["season"], r["date"], r["receiver"], r["note_no"], r["pack_type"], r["cartons"], r["price"],
-                   None, f"{r['season']} workbook, {r['sheet']}", r["note"] or None])
+                   None, r["source"], r["note"] or None])
         n = ws.max_row
         ws.cell(row=n, column=8).value = f"=F{n}*G{n}"
         ws.cell(row=n, column=2).number_format = "dd/mm/yyyy"

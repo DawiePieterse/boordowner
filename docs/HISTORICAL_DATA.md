@@ -180,13 +180,17 @@ No two seasons were kept the same way. What the converter does about it:
 - **A second line on the same delivery note** (the office leaves its date
   blank) counts as part of that delivery, and **the totals row** at the
   bottom of a sheet does not. Every sheet adds up to its own totals row.
-- **A date that is a typo** is left blank, with a Note saying what was
-  typed. 2023 has two: Dapper note 922 ("26/09/202") and BoereTrust note
-  965 ("20/14//2023").
-- **AgriLink's sea prices are flagged** on every row: 2022's sea sheet has
-  R336 to R360 a carton while the payments sheet only records the R87.63
-  advance, and 2025's has R78 to R84, likely the advance, with the 2025
-  Totaal leaving sea blank. No season says which price is final.
+- **A date that is a typo** is worked out from the delivery notes either
+  side, which are numbered in the order they went out (`DATE_FIXES`), and
+  the row's From column says so. 2023 has two: Dapper note 922
+  ("26/09/202") is 26 September, between note 920 (20 Sep) and note 923
+  (26 Sep), and BoereTrust note 965 ("20/14//2023") is 20 November,
+  between note 964 (20 Nov) and note 966 (21 Nov). A typo not in the list
+  is left blank with a Note for the office.
+- **AgriLink's sea prices:** 2022 uses its sea sheet's R336 to R360 a
+  carton, the higher of the two figures, not the R87.63 advance on the
+  payments sheet. 2025's sea rows (R78 to R84, likely the advance; the 2025
+  Totaal leaves sea blank) carry a Note until the final price is known.
 - **Names are lined up with Packhouse's** where the workbooks spelled them
   differently (`PACK_RENAMES`, `RECEIVER_RENAMES`). 2022's "4.55kg XL" is
   the 4.5kg Rhino carton, AgriLink's sea sheets are "Agrilink USA Sea" in

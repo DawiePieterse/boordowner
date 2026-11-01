@@ -474,9 +474,10 @@ rebuilds the forecast so days nobody opens the app still get a point; days
 the live weather forecast was unavailable are skipped. The trend starts
 empty and fills over the first week. There's also `MarketPackPrice` and
 `MarketDailySale` — R per carton by pack type, per season and per receiver
-per day, from the farm's own hand-kept litchi "Markte" workbooks, one per
-season since 2022 (`scripts/import_market_prices.py`; `docs/HISTORICAL_DATA.md`
-says what it reads from each) — and `MarketDailyPrice`, a daily
+per day, from the farm's one clean "Markte History" workbook for 2022 to 2025
+(`scripts/import_market_prices.py`, built once from the office's per-season
+workbooks by `scripts/convert_market_workbooks.py`; `docs/HISTORICAL_DATA.md`
+covers both) — and `MarketDailyPrice`, a daily
 snapshot of Joburg Market's own published Litchis total
 (`backend/market_reference.py`, `OWNER_MARKET_SYNC_HOURS`, default 6, 0 =
 off), all on the Markets tab (`routers/market.py`). The season still being

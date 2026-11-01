@@ -3,7 +3,8 @@ day.
 
 Two sources, one per kind of season:
 
-  * a season with a hand-kept "Markte" workbook - MarketPackPrice (season
+  * a season in the farm's "Markte History" workbook (2022 to 2025, the
+    seasons before Boord kept market records) - MarketPackPrice (season
     totals) and MarketDailySale (a row per delivery), both from
     scripts/import_market_prices.py;
   * the season still being sold, which has no workbook yet - read live from

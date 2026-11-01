@@ -119,54 +119,76 @@ future rename is reported out loud instead of silently emptying a block.
 
 ---
 
-### Market statement workbooks (the Markets tab)
+### Market history (the Markets tab)
 
-The office keeps one "LIETJIES Markte <year> SEISOEN" workbook per season:
-a sheet per receiver with a row per delivery, and from 2024 a
-"<year> Totaal" sheet. `scripts/import_market_prices.py` reads one into the
-Markets tab: the season totals table and the daily price chart. Like the
-harvest workbooks, they are the farm's own records and are not in the
-repository; put them in `data\imports\`.
+The Markets tab's seasons before Boord kept market records, 2022 to 2025,
+come from **one** clean workbook, "Markte History.xlsx". Seasons after 2025
+need no workbook: Owner reads them live from Boord Packhouse's delivery
+notes and Boord's market invoices and statements.
 
-Import each season from **its own** workbook, in any order. From Command
-Prompt in `C:\BoordOwner`:
+"Markte History.xlsx" has three sheets:
+
+- **Sales**: one row per delivery note and pack type, with its season,
+  date, receiver, delivery note, pack type, cartons sold and R per carton.
+  Gross is worked out, "From" says which old workbook and sheet the row
+  came from, and Note is for anything to check. The Markets tab's season
+  totals are added up from these rows, weighted by cartons. A row with no
+  date counts in its season's total but has no point on the daily chart.
+- **Check**: every row with a Note. Correct it on Sales, clear the Note and
+  import again.
+- **Read me**: the above, for the office.
+
+Like the harvest workbooks it is the farm's own record and is not in the
+repository; keep it in `data\imports\`. To load it, or to load it again
+after a correction, from Command Prompt in `C:\BoordOwner`:
 ```bat
-backend\.venv\Scripts\python.exe scripts\import_market_prices.py "data\imports\LIETJIES Markte 2022 SEISOEN.xlsx"
-backend\.venv\Scripts\python.exe scripts\import_market_prices.py "data\imports\LIETJIES Markte 2023 SEISOEN.xlsx"
-backend\.venv\Scripts\python.exe scripts\import_market_prices.py "data\imports\LIETJIES Markte 2024 SEISOEN.xlsx"
-backend\.venv\Scripts\python.exe scripts\import_market_prices.py "data\imports\2025 LIETJIES Markte 2025 SEISOEN Finaal (003).xlsx"
+backend\.venv\Scripts\python.exe scripts\import_market_prices.py "data\imports\Markte History.xlsx"
 ```
-Each run replaces that one season and touches no other, so it is safe to
-re-run. No server restart is needed; reopen the Markets tab.
+It replaces every season the file has rows for and touches no other. No
+server restart is needed; reopen the Markets tab. It names any row it left
+out (no season, receiver, pack type, cartons or price) and any date it
+could not read.
 
-What it does with each season's workbook:
+#### How it was built
 
-- **The season** is the workbook's newest Totaal sheet, or for 2022 and
-  2023, which have none, the year in the file name. A file with neither
-  is refused rather than filed under a guess.
-- **The season totals** come from the season's own Totaal sheet. 2022 and
-  2023 have none, so theirs are added up from the receiver sheets.
-- **Last season's Totaal sheet, copied into the new workbook, is not
-  imported.** The 2024 workbook's "2023 Totaal" has a row of formula junk
-  (Dapper's cartons at R0.03 to R2.33 a carton). It also files 2023's
-  4.5kg air sales under "2kg MIX", because the copy kept 2024's column
-  headings. 2023's own workbook adds up to the same figures as that sheet,
-  less the junk.
-- **Copies of a sheet are left out** (`SKIP_SHEETS`). In 2022 these are
-  "AgriLink", "AgriLink (3)" and "AgriLink (5)", and in 2023 "Agrilink LU
-  23". 2022's "AgriLink" puts the air and sea sheets together, with the sea
-  loads at the R87.63 advance payment rather than the R336 to R360 the sea
-  sheet has. The sea sheet is used, as for every later season.
+`scripts/convert_market_workbooks.py` built it once from the office's
+"LIETJIES Markte <year> SEISOEN" workbooks, and can build it again if
+another old season turns up:
+```bat
+backend\.venv\Scripts\python.exe scripts\convert_market_workbooks.py "data\imports\Markte History.xlsx" "data\imports\LIETJIES Markte 2022 SEISOEN.xlsx" "data\imports\LIETJIES Markte 2023 SEISOEN.xlsx" ...
+```
+That overwrites any corrections made in the file, so correct the rebuilt
+copy again or merge by hand.
+
+No two seasons were kept the same way. What the converter does about it:
+
+- **The season** is the year in the file name.
+- **The receiver sheets are read, not the Totaal sheets.** 2024's receiver
+  sheets add up exactly to its Totaal sheet, and 2025's do too apart from
+  AgriLink's sea loads, which its Totaal leaves blank. Last season's Totaal
+  copied into the next workbook is unreliable: the 2024 workbook's
+  "2023 Totaal" has a row of formula junk (Dapper's cartons at R0.03 to
+  R2.33 a carton), and files 2023's 4.5kg air sales under "2kg MIX".
+- **2022 is an older layout.** The header row is a row lower, the grade
+  sits where SEND would be, and only the carton size is on the row above,
+  so the pack type is the two together. Its "Local" sheet holds every local
+  market, so each row's MARK is its receiver.
+- **Copies of a sheet are left out** (`SKIP_SHEETS`): 2022's "AgriLink",
+  "AgriLink (3)" and "AgriLink (5)", and 2023's "Agrilink LU 23". 2022's
+  "AgriLink" combines the air and sea sheets, with the sea loads at the
+  R87.63 advance payment.
 - **A second line on the same delivery note** (the office leaves its date
   blank) counts as part of that delivery, and **the totals row** at the
-  bottom of a sheet does not. Every sheet in the 2022 to 2024 workbooks adds
-  up to its own totals row.
-- **A date that is a typo** keeps that delivery off the daily chart, but
-  its sales still count in the season totals. The import prints each one.
-  2023 has two: Dapper note 922 ("26/09/202") and BoereTrust note 965
-  ("20/14//2023").
+  bottom of a sheet does not. Every sheet adds up to its own totals row.
+- **A date that is a typo** is left blank, with a Note saying what was
+  typed. 2023 has two: Dapper note 922 ("26/09/202") and BoereTrust note
+  965 ("20/14//2023").
+- **AgriLink's sea prices are flagged** on every row: 2022's sea sheet has
+  R336 to R360 a carton while the payments sheet only records the R87.63
+  advance, and 2025's has R78 to R84, likely the advance, with the 2025
+  Totaal leaving sea blank. No season says which price is final.
 - **Names are lined up with Packhouse's** where the workbooks spelled them
   differently (`PACK_RENAMES`, `RECEIVER_RENAMES`). 2022's "4.55kg XL" is
-  the 4.5kg Rhino carton. AgriLink's sea sheets are "Agrilink USA Sea" in
+  the 4.5kg Rhino carton, AgriLink's sea sheets are "Agrilink USA Sea" in
   every season, and Boeretrust and BoereTrust are "Boere Mark Trust".
-  **Add to these maps rather than editing the workbooks.**
+  **Add to these maps rather than editing the old workbooks.**

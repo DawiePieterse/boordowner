@@ -192,43 +192,41 @@ class SeasonBrief(SQLModel, table=True):
 
 
 class MarketPackPrice(SQLModel, table=True):
-    """One buyer's line for one pack type, from a season's hand-kept
-    litchi "Markte" market-statement workbook (scripts/import_market_prices.py):
-    its own '<year> Totaal' sheet, or for 2022 and 2023, which have none,
-    added up from its per-receiver sheets - what the fruit actually made per
+    """One receiver's season total for one pack type, added up from the
+    farm's "Markte History" workbook's Sales rows, weighted by cartons
+    (scripts/import_market_prices.py) - what the fruit actually made per
     carton, by pack type, the figure the Estimate tab's pack-out mix
     (kg_per_carton) has no way to see since that is a weight, not a price.
     Never written to by the app itself; re-running the import REPLACES the
-    workbook's own season, same as HistoricalHarvest."""
+    seasons the workbook has rows for, same as HistoricalHarvest."""
     id: Optional[int] = Field(default=None, primary_key=True)
     season_year: int = Field(index=True)
-    buyer: str = ""          # e.g. "AgriLink 2kg Lug", "Dapper"
+    buyer: str = ""          # the receiver, e.g. "Agrilink USA Air", "Dapper"
     pack_type: str = ""      # e.g. "2kg XXL", "180G PUNNET MIX"
     cartons_sold: float = 0.0
-    price_per_carton: float = 0.0   # R, the sheet's own PRICE column
-    sub_total: float = 0.0          # R, the sheet's own SUB column
+    price_per_carton: float = 0.0   # R, sub_total / cartons_sold
+    sub_total: float = 0.0          # R, the season's gross for this receiver and pack
 
 
 class MarketDailySale(SQLModel, table=True):
-    """One day's sale of one pack type through one receiver, from the
-    per-receiver sheets of a season's "Markte" workbook (ToroFruit, Dapper,
-    AgriLink USA Lug...; scripts/import_market_prices.py) - the daily grain
-    behind MarketPackPrice's season totals, for the Markets tab's price
-    chart. The receiver is the sheet's own name rather than its MARK
-    column: the sheet is how the office split them (AgriLink by air and by
-    sea are separate sheets, both MARK "AgriLink"). Only seasons with a
-    workbook are here; the season still being sold comes live from Boord
-    Packhouse's delivery notes and Boord's market statements instead (see
-    routers/market.py). Never written by the app itself; re-running the
-    import replaces the workbook's season."""
+    """One day's sale of one pack type through one receiver: a dated Sales
+    row of the farm's "Markte History" workbook (scripts/import_market_prices.py)
+    - the daily grain behind MarketPackPrice's season totals, for the
+    Markets tab's price chart. The receivers are named as the office split
+    them, by sheet (AgriLink by air and by sea, both MARK "AgriLink"), when
+    convert_market_workbooks.py built the workbook. Only the seasons before
+    Boord kept market records are here; the season being sold comes live
+    from Boord Packhouse's delivery notes and Boord's market statements
+    instead (see routers/market.py). Never written by the app itself;
+    re-running the import replaces the seasons the workbook has rows for."""
     id: Optional[int] = Field(default=None, primary_key=True)
     season_year: int = Field(index=True)
     sale_date: date
     receiver: str = ""
-    note_no: str = ""         # the sheet's NR column - the delivery note it went on
+    note_no: str = ""         # the delivery note it went on
     pack_type: str = ""
     cartons_sold: float = 0.0
-    price_per_carton: float = 0.0   # R, the sheet's own PRICE column
+    price_per_carton: float = 0.0   # R, as the market statement had it
 
 
 class MarketDailyPrice(SQLModel, table=True):

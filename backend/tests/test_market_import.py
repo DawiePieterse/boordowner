@@ -1,11 +1,14 @@
-"""scripts/import_market_prices.py: the farm's hand-kept litchi "Markte"
-workbooks, one per season since 2022, into MarketPackPrice and
-MarketDailySale. The farm's own workbooks are per-farm data and never in
-the repo, so each test builds a small workbook in the layout of the season
-it stands for: 2024/2025 (a Totaal sheet and SEND/SOLD/... receiver
-sheets), 2023 (no Totaal, dates as date cells, a SUB header on the wrong
-row) and 2022 (no Totaal, the grade where SEND would be, one "Local" sheet
-for every local market)."""
+"""The market history: scripts/convert_market_workbooks.py, which reads the
+office's per-season "LIETJIES Markte" workbooks (2022 to 2025) once into one
+clean "Markte History" workbook, and scripts/import_market_prices.py, which
+imports that clean workbook into MarketDailySale and MarketPackPrice.
+
+The farm's own workbooks are per-farm data and never in the repo, so each
+converter test builds a small workbook in the layout of the season it
+stands for: 2024/2025 (SEND/SOLD/... receiver sheets beside a Totaal sheet),
+2023 (dates as date cells, a SUB header on the wrong row, a copied sheet)
+and 2022 (the grade where SEND would be, one "Local" sheet for every local
+market)."""
 import os
 import sys
 from datetime import date, datetime
@@ -17,17 +20,17 @@ from db import owner_engine
 from models_owner import MarketDailySale, MarketPackPrice
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"))
+import convert_market_workbooks as conv  # noqa: E402
 import import_market_prices as imp  # noqa: E402
 
 GROUP = ["SEND", "SOLD", "OUTSTANDING", "PRICE", "SUB"]
 
 
-def _sheet(wb, title, label, head, rows, blank_first=True):
+def _sheet(wb, title, label, head, rows):
     """A sheet: an empty first row (as the office's have), the label row,
     the header row, then the data rows."""
     ws = wb.create_sheet(title)
-    if blank_first:
-        ws.append([])
+    ws.append([])
     ws.append(label)
     ws.append(head)
     for r in rows:
@@ -37,17 +40,10 @@ def _sheet(wb, title, label, head, rows, blank_first=True):
 
 def _receiver_2025(wb, title, rows):
     """A 2024/2025 per-receiver sheet: Datum, MARK, DESTIN, NR, then two
-    pack-type groups, 2kg XXL and 2kg XL."""
+    pack-type groups, 2kg XXL and 2kg XL. A Totaal sheet has the same
+    shape, with the buyer in column B."""
     label = [None] * 4 + ["2kg XXL", None, None, None, None, "2kg XL", None, None, None, None]
-    head = ["Datum", "MARK", "DESTIN", "NR"] + GROUP + GROUP
-    return _sheet(wb, title, label, head, rows)
-
-
-def _totaal(wb, title, rows):
-    """A '<year> Totaal' sheet: buyer in column B, the same two groups."""
-    label = [None] * 4 + ["2kg XXL", None, None, None, None, "2kg XL", None, None, None, None]
-    head = ["Datum", "MARK", "DESTIN", "NR"] + GROUP + GROUP
-    return _sheet(wb, title, label, head, rows)
+    return _sheet(wb, title, label, ["Datum", "MARK", "DESTIN", "NR"] + GROUP + GROUP, rows)
 
 
 def _save(wb, tmp_path, name):
@@ -69,60 +65,31 @@ def _workbook_2025(tmp_path):
     _receiver_2025(wb, "AgriLink USA Lug", [
         ["08.11.25", "AgriLink", "USA", "LW3001", 100, 100, 0, 300, 30000, 0, 0, 0, "#DIV/0!", 0],
     ])
-    _totaal(wb, "2025 Totaal", [
-        [None, "Dapper", None, None, 30, 30, 0, 200, 6000, 5, 5, 0, 150, 750],
-        [None, "AgriLink USA Lug", None, None, 100, 100, 0, 300, 30000, 0, 0, 0, "#DIV/0!", 0],
-        [None, "TOTAAL", None, None, 130, 130, 0, 0, 36000, 5, 5, 0, 0, 750],
-    ])
-    _totaal(wb, "2024 Totaal", [   # last season's, copied in for comparison
-        [None, "Dapper 2024", None, None, 1, 1, 0, 0.09, 0.09, 0, 0, 0, "#DIV/0!", 0],
+    _receiver_2025(wb, "2025 Totaal", [   # never read: the receiver sheets are the record
+        [None, "Dapper", None, None, 999, 999, 0, 1, 999, 0, 0, 0, "#DIV/0!", 0],
     ])
     return _save(wb, tmp_path, "LIETJIES Markte 2025 SEISOEN.xlsx")
 
 
-def test_a_workbook_is_its_own_newest_totaal_season(tmp_path):
-    got = imp.load_rows(_workbook_2025(tmp_path))
-    assert got["season"] == 2025 and got["from_totaal"] and got["older_totaal"] == [2024]
-    assert sorted((t.buyer, t.pack_type, t.cartons_sold, t.price_per_carton) for t in got["totals"]) == [
-        ("AgriLink USA Lug", "2kg XXL", 100, 300), ("Dapper", "2kg XL", 5, 150), ("Dapper", "2kg XXL", 30, 200)]
-
-
 def test_a_second_line_joins_the_delivery_above_and_the_totals_row_is_skipped(tmp_path):
     """Note 1201's undated second line is a sale on 7 November; the summary
-    line above the first delivery and the totals row at the bottom are
-    neither, or Dapper's 2kg XXL would be counted two or three times."""
-    got = imp.load_rows(_workbook_2025(tmp_path))
-    dapper = sorted((d.sale_date, d.note_no, d.pack_type, d.cartons_sold)
-                    for d in got["daily"] if d.receiver == "Dapper")
-    assert dapper == [(date(2025, 11, 7), "1201", "2kg XXL", 10), (date(2025, 11, 7), "1201", "2kg XXL", 20),
-                      (date(2025, 11, 10), "1205", "2kg XL", 5)]
-    assert {d.receiver for d in got["daily"]} == {"Dapper", "Agrilink USA Air"}   # RECEIVER_RENAMES
-
-
-def test_import_replaces_only_its_own_season_and_ignores_copied_totaal_sheets(client, tmp_path, monkeypatch, capsys):
-    with Session(owner_engine) as owner:
-        owner.add_all([
-            MarketPackPrice(season_year=2024, buyer="Dapper", pack_type="PrePac", cartons_sold=50,
-                            price_per_carton=350, sub_total=17500),
-            MarketPackPrice(season_year=2025, buyer="Old", pack_type="2kg XL", cartons_sold=1,
-                            price_per_carton=1, sub_total=1),
-        ])
-        owner.commit()
-    monkeypatch.setattr(sys, "argv", ["import_market_prices.py", _workbook_2025(tmp_path)])
-    imp.main()
-    with Session(owner_engine) as owner:
-        totals = owner.exec(select(MarketPackPrice)).all()
-        daily = owner.exec(select(MarketDailySale)).all()
-    assert {(t.season_year, t.buyer) for t in totals} == {
-        (2024, "Dapper"), (2025, "Dapper"), (2025, "AgriLink USA Lug")}   # 2024 untouched by the copied sheet
-    assert {d.season_year for d in daily} == {2025} and len(daily) == 4
-    assert "Not imported: the copied-in 2024 Totaal" in capsys.readouterr().out
+    line above the first delivery, the totals row at the bottom and the
+    Totaal sheet are none of them sales, or Dapper's 2kg XXL would be
+    counted several times over."""
+    rows = conv.workbook_rows(_workbook_2025(tmp_path))
+    assert sorted((r["receiver"], r["date"], r["note_no"], r["pack_type"], r["cartons"]) for r in rows) == [
+        ("Agrilink USA Air", date(2025, 11, 8), "LW3001", "2kg XXL", 100),   # RECEIVER_RENAMES
+        ("Dapper", date(2025, 11, 7), "1201", "2kg XXL", 10),
+        ("Dapper", date(2025, 11, 7), "1201", "2kg XXL", 20),
+        ("Dapper", date(2025, 11, 10), "1205", "2kg XL", 5),
+    ]
+    assert {r["season"] for r in rows} == {2025}   # from the file name
 
 
 def _workbook_2023(tmp_path):
-    """2023: no Totaal sheet, real date cells and a text one, a typo date,
-    the 2kg XL group's SUB header on the label row instead of the header
-    row, an Afrikaans crate name, and a sheet that copies another."""
+    """2023: real date cells and a text one, a typo date, the 2kg XL group's
+    SUB header on the label row instead of the header row, an Afrikaans
+    crate name, and a sheet that copies another."""
     wb = openpyxl.Workbook()
     label = ["Datum", "MARK", "DESTIN", "NR", "2kg XXL", None, None, None, None, "2kg XL", None, None, None, "SUB"]
     head = [None, None, None, None] + GROUP + ["SEND", "SOLD", "OUTSTANDING", "PRICE", None]
@@ -133,32 +100,21 @@ def _workbook_2023(tmp_path):
     ]
     _sheet(wb, "Agrilink Lug", label, head, rows)
     _sheet(wb, "Agrilink LU 23", label, head, rows[:1])   # a part-copy (SKIP_SHEETS)
-    crate_label = [None] * 4 + ["15kg Krat ", None, None, None, None]
-    _sheet(wb, "TFFG", crate_label, ["Datum", "MARK", "DESTIN", "NR"] + GROUP,
+    _sheet(wb, "TFFG", [None] * 4 + ["15kg Krat ", None, None, None, None], ["Datum", "MARK", "DESTIN", "NR"] + GROUP,
            [[datetime(2023, 11, 21), "NuLeaf Brands (TFFG)", "LC", 966, 45, 45, 0, 975, 43875]])
     return _save(wb, tmp_path, "LIETJIES Markte 2023 SEISOEN.xlsx")
 
 
-def test_a_workbook_without_totaal_takes_its_season_from_the_file_name(tmp_path):
-    got = imp.load_rows(_workbook_2023(tmp_path))
-    assert got["season"] == 2023 and not got["from_totaal"] and got["older_totaal"] == []
-    daily = sorted((d.receiver, d.sale_date, d.pack_type, d.cartons_sold) for d in got["daily"])
-    assert daily == [
+def test_the_2023_layout_and_its_typo_date(tmp_path):
+    rows = sorted(conv.workbook_rows(_workbook_2023(tmp_path)), key=lambda r: (r["date"] or date.max, r["pack_type"]))
+    assert [(r["receiver"], r["date"], r["pack_type"], r["cartons"]) for r in rows] == [
         ("AgriLink Lug", date(2023, 9, 13), "2kg XXL", 10),
         ("AgriLink Lug", date(2023, 9, 20), "2kg XL", 47),    # read without its SUB header
         ("AgriLink Lug", date(2023, 9, 20), "2kg XXL", 65),
         ("TFFG", date(2023, 11, 21), "15kg Crate", 45),       # PACK_RENAMES
-    ]   # "Agrilink LU 23" left out: SKIP_SHEETS
-
-
-def test_a_typo_date_counts_in_the_totals_but_not_on_the_chart(tmp_path):
-    got = imp.load_rows(_workbook_2023(tmp_path))
-    assert not any(d.note_no == "922" for d in got["daily"])
-    xxl = next(t for t in got["totals"] if t.buyer == "AgriLink Lug" and t.pack_type == "2kg XXL")
-    # 65 @ 345, 10 @ 300 and note 922's 5 @ 310, weighted by cartons
-    assert xxl.cartons_sold == 80 and xxl.sub_total == 22425 + 3000 + 1550
-    assert xxl.price_per_carton == round((22425 + 3000 + 1550) / 80, 2)
-    assert got["notes"] == ["Agrilink Lug: Datum '26/09/202', NR 922 - in the season totals, not on the daily chart"]
+        ("AgriLink Lug", None, "2kg XXL", 5),                 # note 922: kept, its date left for the office
+    ]   # and nothing from "Agrilink LU 23", the copy
+    assert rows[-1]["note"] == "Datum typed as '26/09/202': fill in the date."
 
 
 def _workbook_2022(tmp_path):
@@ -177,44 +133,94 @@ def _workbook_2022(tmp_path):
     _sheet(wb, "AgriLink", label, head, [   # the combined copy (SKIP_SHEETS)
         ["17.11.2022", "AgriLink", "LW2224", 46, "MAU", 4100, 4100, 0, 87.65, 359365, 0, 0, 0, "#DIV/0!", 0],
     ])
-    local_label = [None] * 6 + ["PrePac", None, None, None, None]
-    _sheet(wb, "Local", local_label, [None, "MARK", "DESTIN", "NR", "WEEK", "KULTIVAR"] + GROUP, [
-        ["22.09.2022", "Dapper", "LC", 801, 38, "TMR", 3, 3, 0, 320, 960],
-        ["12.10.2022", "Boeretrust", "LC", 812, 41, "TMR", 20, 20, 0, 200, 4000],
-    ])
+    _sheet(wb, "Local", [None] * 6 + ["PrePac", None, None, None, None],
+           [None, "MARK", "DESTIN", "NR", "WEEK", "KULTIVAR"] + GROUP, [
+               ["22.09.2022", "Dapper", "LC", 801, 38, "TMR", 3, 3, 0, 320, 960],
+               ["12.10.2022", "Boeretrust", "LC", 812, 41, "TMR", 20, 20, 0, 200, 4000],
+           ])
     return _save(wb, tmp_path, "LIETJIES Markte 2022 SEISOEN.xlsx")
 
 
 def test_the_2022_layout_puts_size_and_grade_together(tmp_path):
-    got = imp.load_rows(_workbook_2022(tmp_path))
-    daily = sorted((d.receiver, d.note_no, d.pack_type, d.cartons_sold, d.price_per_carton) for d in got["daily"])
-    assert daily == [
+    rows = conv.workbook_rows(_workbook_2022(tmp_path))
+    assert sorted((r["receiver"], r["note_no"], r["pack_type"], r["cartons"], r["price"]) for r in rows) == [
         ("Agrilink USA Sea", "LW2188", "PrePac", 384, 284),        # "PrePac L" -> "PrePac"
         ("Agrilink USA Sea", "LW2224", "4.5kg Rhino", 4100, 338),  # "4.55kg XL" -> "4.5kg Rhino"
         ("Boere Mark Trust", "812", "PrePac", 20, 200),           # Local: the receiver is the row's MARK
         ("Dapper", "801", "PrePac", 3, 320),
     ]   # and nothing from "AgriLink", the combined copy at the advance-payment price
+    assert all(r["note"].startswith("Sea:") for r in rows if r["receiver"] == "Agrilink USA Sea")   # SHEET_NOTES
 
 
-def test_season_totals_are_added_up_per_receiver_and_pack(client, tmp_path, monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["import_market_prices.py", _workbook_2022(tmp_path)])
-    imp.main()
-    r = client.get("/api/market/summary").json()
-    assert r["seasons"] == [2022]
-    # PrePac: 384 @ 284 + 3 @ 320 + 20 @ 200, weighted by cartons
-    assert r["by_season"]["2022"]["PrePac"] == {"cartons": 407.0,
-                                                "rand_per_carton": round((109056 + 960 + 4000) / 407, 2)}
-    assert r["by_season"]["2022"]["4.5kg Rhino"] == {"cartons": 4100.0, "rand_per_carton": 338.0}
-    assert r["daily"]["workbook_seasons"] == [2022]
+def _history(tmp_path, *sources):
+    out = str(tmp_path / "Markte History.xlsx")
+    rows = []
+    for s in sources:
+        rows += conv.workbook_rows(s)
+    conv.write_history(rows, out)
+    return out
 
 
-def test_no_season_no_import(client, tmp_path, monkeypatch, capsys):
-    wb = openpyxl.Workbook()
-    _receiver_2025(wb, "Dapper", [["07.11.25", "Dapper", "LC", 1201, 10, 10, 0, 200, 2000, 0, 0, 0, None, 0]])
-    path = _save(wb, tmp_path, "Markte.xlsx")
-    assert imp.load_rows(path)["season"] is None
+def test_the_clean_workbook_round_trips_through_the_importer(client, tmp_path, monkeypatch, capsys):
+    """Convert 2022 and 2023, import the result: the daily chart gets every
+    dated line, the season totals every line (note 922 too), weighted by
+    cartons, and the import says which row had no date."""
+    path = _history(tmp_path, _workbook_2022(tmp_path), _workbook_2023(tmp_path))
+    wb = openpyxl.load_workbook(path)
+    assert wb.sheetnames == ["Sales", "Check", "Read me"]
+    assert [c.value for c in wb["Sales"][1]] == conv.SALES_COLUMNS
     monkeypatch.setattr(sys, "argv", ["import_market_prices.py", path])
     imp.main()
-    assert "nothing imported" in capsys.readouterr().out
+    with Session(owner_engine) as owner:
+        daily = owner.exec(select(MarketDailySale)).all()
+        totals = {(t.season_year, t.buyer, t.pack_type): t for t in owner.exec(select(MarketPackPrice)).all()}
+    assert len(daily) == 8 and not any(d.note_no == "922" for d in daily)
+    xxl = totals[(2023, "AgriLink Lug", "2kg XXL")]
+    assert (xxl.cartons_sold, xxl.sub_total) == (80, 22425 + 3000 + 1550)   # 65 @ 345, 10 @ 300, 5 @ 310
+    assert xxl.price_per_carton == round((22425 + 3000 + 1550) / 80, 2)
+    r = client.get("/api/market/summary").json()
+    assert r["seasons"] == [2022, 2023] and r["daily"]["workbook_seasons"] == [2022, 2023]
+    # PrePac 2022: 384 @ 284 + 3 @ 320 + 20 @ 200
+    assert r["by_season"]["2022"]["PrePac"] == {"cartons": 407.0,
+                                                "rand_per_carton": round((109056 + 960 + 4000) / 407, 2)}
+    assert "isn't a date" not in capsys.readouterr().out   # a blank date is expected, not a problem
+
+
+def test_an_office_correction_on_the_sales_sheet_is_what_imports(client, tmp_path, monkeypatch, capsys):
+    """The clean workbook is the copy the office corrects: a date filled in
+    by hand puts the row on the chart, a typo'd one is reported, and a row
+    with no price is left out and named - and a re-import replaces only the
+    seasons the file has."""
+    with Session(owner_engine) as owner:
+        owner.add(MarketPackPrice(season_year=2026, buyer="Dapper", pack_type="PrePac", cartons_sold=1,
+                                  price_per_carton=1, sub_total=1))
+        owner.commit()
+    path = _history(tmp_path, _workbook_2023(tmp_path))
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Sales"]
+    heads = [c.value for c in ws[1]]
+    date_col, price_col = heads.index("Date") + 1, heads.index("R per carton") + 1
+    undated = next(r for r in range(2, ws.max_row + 1) if ws.cell(row=r, column=date_col).value is None)
+    ws.cell(row=undated, column=date_col).value = "26/09/2023"
+    ws.cell(row=2, column=date_col).value = "31/02/2023"
+    ws.cell(row=3, column=price_col).value = None
+    wb.save(path)
+    monkeypatch.setattr(sys, "argv", ["import_market_prices.py", path])
+    imp.main()
+    out = capsys.readouterr().out
+    assert "Sales row 2: date '31/02/2023' isn't a date" in out
+    assert "Sales row 3: needs a season, receiver, pack type, cartons and price - left out." in out
+    with Session(owner_engine) as owner:
+        days = {d.sale_date for d in owner.exec(select(MarketDailySale)).all()}
+        seasons = {t.season_year for t in owner.exec(select(MarketPackPrice)).all()}
+    assert date(2023, 9, 26) in days and seasons == {2023, 2026}
+
+
+def test_a_file_without_a_sales_sheet_imports_nothing(client, tmp_path, monkeypatch, capsys):
+    path = str(tmp_path / "Markte.xlsx")
+    openpyxl.Workbook().save(path)
+    monkeypatch.setattr(sys, "argv", ["import_market_prices.py", path])
+    imp.main()
+    assert "No 'Sales' sheet" in capsys.readouterr().out
     with Session(owner_engine) as owner:
         assert owner.exec(select(MarketDailySale)).all() == []

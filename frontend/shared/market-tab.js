@@ -1,7 +1,8 @@
-// Markets tab (/api/market/summary, backend/routers/market.py): a daily
-// chart of price or units sold for one pack type, per receiver, with the
-// seasons ticked laid over each other - and below it each pack type's
-// season R/carton. A season with a market workbook comes from its
+// Markets tab (/api/market/summary, backend/routers/market.py): a chart of
+// price or units sold for one pack type - one season ticked, a line per
+// receiver, day by day; several ticked, a line per season, week by week, so
+// the seasons can be told apart - and below it each pack type's season
+// R/carton. A season with a market workbook comes from its
 // per-receiver sheets (scripts/import_market_prices.py); the season still
 // being sold comes live from Boord Packhouse's delivery notes and Boord's
 // market statements and invoices, so it fills in as they are entered. The
@@ -58,6 +59,19 @@ const LWMarketTab = (() => {
       marker: shapes[i % shapes.length],
       hollow: i >= shapes.length,
     };
+  }
+
+  // A season's colour and marker when several are compared, fixed by its
+  // place among every season on file counted from the newest (the newest is
+  // always the navy line), not by what is ticked, so it keeps both as others
+  // come and go. Not LWCharts.PALETTE's order: its yellow, third, is too pale
+  // for a line that has to be told from four others on white.
+  const SEASON_COLOURS = ["#0A2F6B", "#C8102E", "#16a34a", "#ea580c", "#7c3aed", "#0891b2", "#64748b", "#a16207"];
+  function seasonStyle(season) {
+    const all = _data.daily.seasons;
+    const i = Math.max(0, all.length - 1 - all.indexOf(season));
+    const shapes = LWCharts.MARKER_SHAPES;
+    return { color: SEASON_COLOURS[i % SEASON_COLOURS.length], marker: shapes[i % shapes.length] };
   }
 
   function bind() {
@@ -174,7 +188,9 @@ const LWMarketTab = (() => {
       checked: !_receiversOff.has(n),
       faded: !selling.has(n),
       title: selling.has(n) ? "" : `No ${_pack || ""} sales through them in the seasons ticked`,
-      swatch: LWCharts.swatch(receiverStyle(n)),
+      // Several seasons ticked: the lines are seasons, so a receiver's own
+      // colour would point at nothing on the chart.
+      swatch: tickedSeasons().length > 1 ? "" : LWCharts.swatch(receiverStyle(n)),
     })).join("");
   }
 
@@ -207,13 +223,16 @@ const LWMarketTab = (() => {
         ? `${s} so far from Boord Packhouse's delivery notes, priced from Boord's market invoices (or the typed statement)`
         : `${s}: no sales of the farm's own on file yet`));
     const notes = [sources.join("; ") + "."];
-    if (several) notes.push(`Seasons are laid over each other by day of season from ${anchorText}; the weeks shown are ${labelSeason}'s, and earlier seasons are dotted.`);
+    if (several) notes.push(`Each season is one line: the receivers ticked put together week by week, the price weighted by cartons. Seasons are laid over each other by day of season from ${anchorText}, and the weeks shown are ${labelSeason}'s. Tick one season to see each receiver day by day.`);
     if (refPts.length) notes.push("The dashed line is Joburg Market's whole-market average price per unit sold and units sold, recorded daily.");
     else if (daily.reference.length) notes.push(`No Joburg Market line in these seasons: the market keeps no history, and this app has recorded it only since ${Boord.fmtDate(daily.reference[0].date)}.`);
     if (!_pack) notes.push("Tick a pack type to plot the farm's own sales.");
-    document.getElementById("marketChartSource").textContent = `${notes.join(" ")} Hover a marker for the day.`;
+    document.getElementById("marketChartSource").textContent =
+      `${notes.join(" ")} Hover a marker for the ${several ? "week" : "day"}.`;
+    document.getElementById("marketChartTitle").textContent =
+      several ? "Weekly Prices by Pack Type and Season" : "Daily Prices by Pack Type and Receiver";
 
-    const measure = metric === "price" ? "Daily Price (R per carton / unit)" : "Daily Units Sold";
+    const measure = `${several ? "Weekly" : "Daily"} ${metric === "price" ? "Price (R per carton / unit)" : "Units Sold"}`;
     document.querySelector("#marketChartCard .chart-pdf-btn").dataset.title =
       `${measure} - ${_pack || "Joburg Market only"} - ${seasons.join(" & ")} Season${several ? "s" : ""}`;
 
@@ -224,8 +243,51 @@ const LWMarketTab = (() => {
       dash: season >= newest ? "" : EARLIER_DASH, muted: season < newest, emphasize: plotted.length > 1 && season === newest,
     });
 
+    // The axis spans every day the seasons ticked have - any pack type or
+    // receiver - so ticking lines on and off never moves the weeks. Its
+    // weeks run from the Monday the earliest day falls in, on the newest
+    // season's calendar, and a compared season's weekly points sit in those
+    // same weeks.
+    const days = pts.concat(refPts).map(seasonDay);
+    const first = days.length ? Math.min(...days) : 0, last = days.length ? Math.max(...days) : 0;
+    const base = anchorDay(labelSeason);
+    const start = first - ((dateOf(base + first).getUTCDay() + 6) % 7);
+    const isoOf = (n) => dateOf(n).toISOString().slice(0, 10);
+    const short = (n) => Boord.fmtDate(isoOf(n), { day: "numeric", month: "short", year: "numeric" });
+
     const series = [];
-    seasons.forEach((season) => {
+    if (several) {
+      // One line per season, so five seasons are five lines, not five times
+      // every receiver: each week's cartons added up across the receivers
+      // ticked, its price their gross over those cartons. A week is also
+      // what reads at this scale - the days of one season already scatter.
+      seasons.forEach((season) => {
+        const weeks = new Map();   // week on the axis -> {cartons, gross, receivers}
+        pts.filter((p) => p.season_year === season && p.pack_type === _pack && !_receiversOff.has(p.receiver))
+          .forEach((p) => {
+            const w = Math.floor((seasonDay(p) - start) / 7);
+            const acc = weeks.get(w) || { cartons: 0, gross: 0, receivers: new Set() };
+            acc.cartons += p.cartons;
+            acc.gross += p.cartons * p.price;
+            acc.receivers.add(p.receiver);
+            weeks.set(w, acc);
+          });
+        if (!weeks.size) return;
+        series.push({
+          label: String(season), ...seasonStyle(season), emphasize: plotted.length > 1 && season === newest,
+          points: [...weeks.entries()].sort((x, y) => x[0] - y[0]).map(([w, acc]) => {
+            const from = anchorDay(season) + start + w * 7;
+            const price = acc.gross / acc.cartons;
+            return {
+              x: start + w * 7 + 3, y: metric === "price" ? price : acc.cartons,
+              title: `${_pack} · ${season} season\n${short(from)} to ${short(from + 6)}\n`
+                + `${money(price)}/carton · ${Math.round(acc.cartons).toLocaleString(Boord.LOCALE)} cartons\n`
+                + [...acc.receivers].join(", "),
+            };
+          }),
+        });
+      });
+    } else seasons.forEach((season) => {
       daily.receivers.filter((r) => !_receiversOff.has(r)).forEach((receiver) => {
         const mine = pts.filter((p) => p.season_year === season && p.receiver === receiver && p.pack_type === _pack);
         if (!mine.length) return;
@@ -261,9 +323,6 @@ const LWMarketTab = (() => {
 
     const chart = document.getElementById("marketDailyChart");
     const legendEl = document.getElementById("marketDailyLegend");
-    // The axis spans every day the seasons ticked have - any pack type or
-    // receiver - so ticking lines on and off never moves the weeks.
-    const days = pts.concat(refPts).map(seasonDay);
     if (!series.length || !days.length) {
       LWCharts.emptyState(chart, seasons.length
         ? "Nothing to plot - tick a pack type, a receiver that sold it, or Joburg Market"
@@ -271,11 +330,7 @@ const LWMarketTab = (() => {
       legendEl.innerHTML = "";
       return;
     }
-    // Week ticks from the newest season's own calendar, from the Monday the
-    // earliest day falls in.
-    const first = Math.min(...days), last = Math.max(...days);
-    const base = anchorDay(labelSeason);
-    const start = first - ((dateOf(base + first).getUTCDay() + 6) % 7);
+    // Week ticks from the newest season's own calendar (start, above).
     const ticks = [];
     let month = null;
     for (let x = start; x <= last; x += 7) {

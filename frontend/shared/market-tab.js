@@ -1,9 +1,10 @@
 // Markets tab (/api/market/summary, backend/routers/market.py): a chart of
-// price or units sold for one pack type - one season ticked, a line per
-// receiver, day by day; several ticked, a line per season, week by week, so
-// the seasons can be told apart - and below it each pack type's season
-// R/carton. A season with a market workbook comes from its
-// per-receiver sheets (scripts/import_market_prices.py); the season still
+// price for one pack type - one season ticked, a line per receiver, day by
+// day; several ticked, a line per season, week by week, so the seasons can
+// be told apart - then the same lines in cartons sold, cut by the same
+// ticks, and below them each pack type's season R/carton. A season with a
+// market workbook comes from its per-receiver sheets
+// (scripts/import_market_prices.py); the season still
 // being sold comes live from Boord Packhouse's delivery notes and Boord's
 // market statements and invoices, so it fills in as they are entered. The
 // pack types and receivers listed are Boord Packhouse's own, so one set up
@@ -77,7 +78,6 @@ const LWMarketTab = (() => {
   function bind() {
     if (_bound) return;
     _bound = true;
-    document.getElementById("marketMetric").addEventListener("change", renderChart);
     const card = document.getElementById("marketChartCard");
     card.addEventListener("change", (e) => {
       const { kind } = e.target.dataset;
@@ -195,15 +195,17 @@ const LWMarketTab = (() => {
   }
 
   function renderChart() {
-    const card = document.getElementById("marketChartCard");
-    if (!_data || !_data.daily.seasons.length) { card.classList.add("hidden"); return; }
-    card.classList.remove("hidden");
+    // The cartons card has no ticks of its own: it is drawn from the price
+    // card's, so the two always show the same lines.
+    const cards = ["marketChartCard", "marketCartonsCard"].map((id) => document.getElementById(id));
+    const show = !!(_data && _data.daily.seasons.length);
+    cards.forEach((c) => c.classList.toggle("hidden", !show));
+    if (!show) return;
     renderChecks();
 
     const daily = _data.daily;
     const seasons = tickedSeasons();
     const several = seasons.length > 1;
-    const metric = document.getElementById("marketMetric").value;
     const pts = tickedPoints();
     // The weeks are labelled by the newest season ticked, but the solid line
     // goes to the newest one with the farm's own sales on the chart: early
@@ -229,12 +231,13 @@ const LWMarketTab = (() => {
     if (!_pack) notes.push("Tick a pack type to plot the farm's own sales.");
     document.getElementById("marketChartSource").textContent =
       `${notes.join(" ")} Hover a marker for the ${several ? "week" : "day"}.`;
-    document.getElementById("marketChartTitle").textContent =
-      several ? "Weekly Prices by Pack Type and Season" : "Daily Prices by Pack Type and Receiver";
-
-    const measure = `${several ? "Weekly" : "Daily"} ${metric === "price" ? "Price (R per carton / unit)" : "Units Sold"}`;
-    document.querySelector("#marketChartCard .chart-pdf-btn").dataset.title =
-      `${measure} - ${_pack || "Joburg Market only"} - ${seasons.join(" & ")} Season${several ? "s" : ""}`;
+    const by = several ? "by Pack Type and Season" : "by Pack Type and Receiver";
+    document.getElementById("marketChartTitle").textContent = `${several ? "Weekly" : "Daily"} Prices ${by}`;
+    document.getElementById("marketCartonsTitle").textContent = `${several ? "Weekly" : "Daily"} Cartons ${by}`;
+    const pdfTitle = (measure) => `${several ? "Weekly" : "Daily"} ${measure} - ${_pack || "Joburg Market only"}`
+      + ` - ${seasons.join(" & ")} Season${several ? "s" : ""}`;
+    document.querySelector("#marketChartCard .chart-pdf-btn").dataset.title = pdfTitle("Price (R per carton / unit)");
+    document.querySelector("#marketCartonsCard .chart-pdf-btn").dataset.title = pdfTitle("Cartons Sold");
 
     const money = (v) => `R${v.toLocaleString(Boord.LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     const day = (iso) => `${Boord.fmtDate(iso, { weekday: "short", day: "numeric", month: "short", year: "numeric" })}`
@@ -255,114 +258,121 @@ const LWMarketTab = (() => {
     const isoOf = (n) => dateOf(n).toISOString().slice(0, 10);
     const short = (n) => Boord.fmtDate(isoOf(n), { day: "numeric", month: "short", year: "numeric" });
 
-    const series = [];
-    if (several) {
-      // One line per season, so five seasons are five lines, not five times
-      // every receiver: each week's cartons added up across the receivers
-      // ticked, its price their gross over those cartons. A week is also
-      // what reads at this scale - the days of one season already scatter.
-      seasons.forEach((season) => {
-        const weeks = new Map();   // week on the axis -> {cartons, gross, receivers}
-        pts.filter((p) => p.season_year === season && p.pack_type === _pack && !_receiversOff.has(p.receiver))
-          .forEach((p) => {
-            const w = Math.floor((seasonDay(p) - start) / 7);
-            const acc = weeks.get(w) || { cartons: 0, gross: 0, receivers: new Set() };
-            acc.cartons += p.cartons;
-            acc.gross += p.cartons * p.price;
-            acc.receivers.add(p.receiver);
-            weeks.set(w, acc);
-          });
-        if (!weeks.size) return;
-        series.push({
-          label: String(season), ...seasonStyle(season), emphasize: plotted.length > 1 && season === newest,
-          points: [...weeks.entries()].sort((x, y) => x[0] - y[0]).map(([w, acc]) => {
-            const from = anchorDay(season) + start + w * 7;
-            const price = acc.gross / acc.cartons;
-            return {
-              x: start + w * 7 + 3, y: metric === "price" ? price : acc.cartons,
-              title: `${_pack} · ${season} season\n${short(from)} to ${short(from + 6)}\n`
-                + `${money(price)}/carton · ${Math.round(acc.cartons).toLocaleString(Boord.LOCALE)} cartons\n`
-                + [...acc.receivers].join(", "),
-            };
-          }),
-        });
-      });
-    } else seasons.forEach((season) => {
-      daily.receivers.filter((r) => !_receiversOff.has(r)).forEach((receiver) => {
-        const mine = pts.filter((p) => p.season_year === season && p.receiver === receiver && p.pack_type === _pack);
-        if (!mine.length) return;
-        series.push({
-          label: several ? `${season} · ${receiver}` : receiver, ...receiverStyle(receiver), ...lineStyle(season),
-          points: mine.map((p) => ({
-            x: seasonDay(p), y: metric === "price" ? p.price : p.cartons,
-            title: `${receiver} · ${p.pack_type} · ${season} season\n${day(p.date)}\n`
-              + `${money(p.price)}/carton · ${Math.round(p.cartons).toLocaleString(Boord.LOCALE)} cartons`,
-          })),
-        });
-      });
-    });
-    // Joburg Market last, so its dashed line is drawn over the farm's. Not
-    // cut by the pack type or receivers: it is the whole market's litchis.
-    if (_refOn) {
-      seasons.forEach((season) => {
-        const mine = refPts.filter((r) => r.season_year === season && (metric === "price" ? r.price : r.units) != null);
-        if (!mine.length) return;
-        series.push({
-          label: several ? `${REF_LABEL} ${season}` : REF_LABEL, color: REF_COLOUR, dashed: true,
-          muted: season < newest, marker: "circle", hollow: true,
-          points: mine.map((r) => ({
-            x: seasonDay(r), y: metric === "price" ? r.price : r.units,
-            title: `${REF_LABEL} · ${season} season\n${day(r.date)}\n`
-              + `${r.price != null ? `${money(r.price)}/unit · ` : ""}`
-              + `${r.units != null ? `${Math.round(r.units).toLocaleString(Boord.LOCALE)} units · ` : ""}`
-              + `${money(r.rand_per_kg)}/kg · ${Math.round(r.kg).toLocaleString(Boord.LOCALE)} kg`,
-          })),
-        });
-      });
-    }
+    plot("price", "marketDailyChart", "marketDailyLegend");
+    plot("cartons", "marketCartonsChart", "marketCartonsLegend");
 
-    const chart = document.getElementById("marketDailyChart");
-    const legendEl = document.getElementById("marketDailyLegend");
-    if (!series.length || !days.length) {
-      LWCharts.emptyState(chart, seasons.length
-        ? "Nothing to plot - tick a pack type, a receiver that sold it, or Joburg Market"
-        : "Tick a season to plot it");
-      legendEl.innerHTML = "";
-      return;
+    // One chart from the lines ticked above: "price" (R/carton, Joburg
+    // Market's R/unit) or "cartons" (Joburg Market's units sold).
+    function plot(metric, chartId, legendId) {
+      const series = [];
+      if (several) {
+        // One line per season, so five seasons are five lines, not five times
+        // every receiver: each week's cartons added up across the receivers
+        // ticked, its price their gross over those cartons. A week is also
+        // what reads at this scale - the days of one season already scatter.
+        seasons.forEach((season) => {
+          const weeks = new Map();   // week on the axis -> {cartons, gross, receivers}
+          pts.filter((p) => p.season_year === season && p.pack_type === _pack && !_receiversOff.has(p.receiver))
+            .forEach((p) => {
+              const w = Math.floor((seasonDay(p) - start) / 7);
+              const acc = weeks.get(w) || { cartons: 0, gross: 0, receivers: new Set() };
+              acc.cartons += p.cartons;
+              acc.gross += p.cartons * p.price;
+              acc.receivers.add(p.receiver);
+              weeks.set(w, acc);
+            });
+          if (!weeks.size) return;
+          series.push({
+            label: String(season), ...seasonStyle(season), emphasize: plotted.length > 1 && season === newest,
+            points: [...weeks.entries()].sort((x, y) => x[0] - y[0]).map(([w, acc]) => {
+              const from = anchorDay(season) + start + w * 7;
+              const price = acc.gross / acc.cartons;
+              return {
+                x: start + w * 7 + 3, y: metric === "price" ? price : acc.cartons,
+                title: `${_pack} · ${season} season\n${short(from)} to ${short(from + 6)}\n`
+                  + `${money(price)}/carton · ${Math.round(acc.cartons).toLocaleString(Boord.LOCALE)} cartons\n`
+                  + [...acc.receivers].join(", "),
+              };
+            }),
+          });
+        });
+      } else seasons.forEach((season) => {
+        daily.receivers.filter((r) => !_receiversOff.has(r)).forEach((receiver) => {
+          const mine = pts.filter((p) => p.season_year === season && p.receiver === receiver && p.pack_type === _pack);
+          if (!mine.length) return;
+          series.push({
+            label: several ? `${season} · ${receiver}` : receiver, ...receiverStyle(receiver), ...lineStyle(season),
+            points: mine.map((p) => ({
+              x: seasonDay(p), y: metric === "price" ? p.price : p.cartons,
+              title: `${receiver} · ${p.pack_type} · ${season} season\n${day(p.date)}\n`
+                + `${money(p.price)}/carton · ${Math.round(p.cartons).toLocaleString(Boord.LOCALE)} cartons`,
+            })),
+          });
+        });
+      });
+      // Joburg Market last, so its dashed line is drawn over the farm's. Not
+      // cut by the pack type or receivers: it is the whole market's litchis.
+      if (_refOn) {
+        seasons.forEach((season) => {
+          const mine = refPts.filter((r) => r.season_year === season && (metric === "price" ? r.price : r.units) != null);
+          if (!mine.length) return;
+          series.push({
+            label: several ? `${REF_LABEL} ${season}` : REF_LABEL, color: REF_COLOUR, dashed: true,
+            muted: season < newest, marker: "circle", hollow: true,
+            points: mine.map((r) => ({
+              x: seasonDay(r), y: metric === "price" ? r.price : r.units,
+              title: `${REF_LABEL} · ${season} season\n${day(r.date)}\n`
+                + `${r.price != null ? `${money(r.price)}/unit · ` : ""}`
+                + `${r.units != null ? `${Math.round(r.units).toLocaleString(Boord.LOCALE)} units · ` : ""}`
+                + `${money(r.rand_per_kg)}/kg · ${Math.round(r.kg).toLocaleString(Boord.LOCALE)} kg`,
+            })),
+          });
+        });
+      }
+
+      const chart = document.getElementById(chartId);
+      const legendEl = document.getElementById(legendId);
+      if (!series.length || !days.length) {
+        LWCharts.emptyState(chart, seasons.length
+          ? "Nothing to plot - tick a pack type, a receiver that sold it, or Joburg Market"
+          : "Tick a season to plot it");
+        legendEl.innerHTML = "";
+        return;
+      }
+      // Week ticks from the newest season's own calendar (start, above).
+      const ticks = [];
+      let month = null;
+      for (let x = start; x <= last; x += 7) {
+        const d = dateOf(base + x);
+        // The month goes under the first week that starts in it - or, for the
+        // first tick, under the month the earliest day fell in.
+        const m = (x === start ? dateOf(base + first) : d).toLocaleDateString(Boord.LOCALE, { month: "short", timeZone: "UTC" });
+        ticks.push({ x, label: `Wk ${isoWeek(d)}`, sub: m !== month ? m : "" });
+        month = m;
+      }
+      // Zoomed on what is drawn: 50 (rand or cartons) below the lowest value
+      // and 50 above the highest, never below 0 - so a season whose prices sit
+      // between R200 and R300 fills the chart instead of a band of a 0-R1 000
+      // axis. It re-zooms as lines are ticked on and off.
+      const ys = series.flatMap((s) => s.points.map((p) => p.y));
+      const yDomain = [Math.max(0, Math.min(...ys) - 50), Math.max(...ys) + 50];
+      LWCharts.lineChart(chart, {
+        series, xTicks: ticks, markers: true, xMin: start, xMax: last, minWidthPerPoint: 6, height: 300, ySteps: 10, yDomain,
+        yLabel: metric === "price" ? (v) => `R${Math.round(v).toLocaleString(Boord.LOCALE)}`
+                                   : (v) => Math.round(v).toLocaleString(Boord.LOCALE),
+      });
+      // A season is wide (a marker per day), so lineChart's fixed 300px box
+      // left a blank band under the plot once it shrank to the card's width -
+      // on screen and in the PDF. Its own proportions set the height instead.
+      // (Below 720px the card scrolls sideways - see #marketChartExport.)
+      const svgEl = chart.querySelector("svg");
+      svgEl.removeAttribute("height");
+      svgEl.style.height = "auto";
+      LWCharts.legend(legendEl, series.map((s) => ({
+        label: s.label, color: s.color, marker: s.marker, hollow: s.hollow,
+        dash: s.dash || (s.dashed ? "5,4" : ""), muted: s.muted, emphasize: s.emphasize,
+      })));
     }
-    // Week ticks from the newest season's own calendar (start, above).
-    const ticks = [];
-    let month = null;
-    for (let x = start; x <= last; x += 7) {
-      const d = dateOf(base + x);
-      // The month goes under the first week that starts in it - or, for the
-      // first tick, under the month the earliest day fell in.
-      const m = (x === start ? dateOf(base + first) : d).toLocaleDateString(Boord.LOCALE, { month: "short", timeZone: "UTC" });
-      ticks.push({ x, label: `Wk ${isoWeek(d)}`, sub: m !== month ? m : "" });
-      month = m;
-    }
-    // Zoomed on what is drawn: 50 (rand or cartons) below the lowest value
-    // and 50 above the highest, never below 0 - so a season whose prices sit
-    // between R200 and R300 fills the chart instead of a band of a 0-R1 000
-    // axis. It re-zooms as lines are ticked on and off.
-    const ys = series.flatMap((s) => s.points.map((p) => p.y));
-    const yDomain = [Math.max(0, Math.min(...ys) - 50), Math.max(...ys) + 50];
-    LWCharts.lineChart(chart, {
-      series, xTicks: ticks, markers: true, xMin: start, xMax: last, minWidthPerPoint: 6, height: 300, ySteps: 10, yDomain,
-      yLabel: metric === "price" ? (v) => `R${Math.round(v).toLocaleString(Boord.LOCALE)}`
-                                 : (v) => Math.round(v).toLocaleString(Boord.LOCALE),
-    });
-    // A season is wide (a marker per day), so lineChart's fixed 300px box
-    // left a blank band under the plot once it shrank to the card's width -
-    // on screen and in the PDF. Its own proportions set the height instead.
-    // (Below 720px the card scrolls sideways - see #marketChartExport.)
-    const svgEl = chart.querySelector("svg");
-    svgEl.removeAttribute("height");
-    svgEl.style.height = "auto";
-    LWCharts.legend(legendEl, series.map((s) => ({
-      label: s.label, color: s.color, marker: s.marker, hollow: s.hollow,
-      dash: s.dash || (s.dashed ? "5,4" : ""), muted: s.muted, emphasize: s.emphasize,
-    })));
   }
 
   function renderTable(market) {

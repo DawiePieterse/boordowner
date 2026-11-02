@@ -408,10 +408,6 @@
         <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
           <div id="marketChartTitle" class="font-semibold">Daily Prices by Pack Type and Receiver</div>
           <div class="flex items-center gap-2">
-            <select id="marketMetric" class="border border-slate-300 rounded-lg p-1.5 text-sm" aria-label="Show">
-              <option value="price">Price (R/carton)</option>
-              <option value="cartons">Units sold (cartons)</option>
-            </select>
             <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="marketChartExport" data-title="Daily Prices by Pack Type and Receiver" title="Download the chart as PDF" aria-label="Download the chart as PDF"><i class="fa-solid fa-file-pdf"></i></button>
             <button class="chart-xlsx-btn text-slate-400 hover:text-slate-600" title="Download as Excel - the days on the chart, as ticked, plus the season totals" aria-label="Download as Excel"><i class="fa-solid fa-file-excel"></i></button>
           </div>
@@ -452,6 +448,21 @@
           <div id="marketChartExport" style="min-width:720px">
             <div id="marketDailyChart"></div>
             <div id="marketDailyLegend" class="mt-2" style="padding-bottom:6px"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cut by the price chart's ticks above, so the two read together. -->
+      <div id="marketCartonsCard" class="bg-white rounded-xl shadow p-4 hidden">
+        <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+          <div id="marketCartonsTitle" class="font-semibold">Daily Cartons by Pack Type and Receiver</div>
+          <button class="chart-pdf-btn text-slate-400 hover:text-slate-600" data-target="marketCartonsExport" data-title="Daily Cartons by Pack Type and Receiver" title="Download the chart as PDF" aria-label="Download the chart as PDF"><i class="fa-solid fa-file-pdf"></i></button>
+        </div>
+        <div class="text-xs text-slate-500 mb-3">Cartons sold, for the seasons, pack type, receivers and reference ticked above. Joburg Market's dashed line is its units sold.</div>
+        <div class="overflow-x-auto">
+          <div id="marketCartonsExport" style="min-width:720px">
+            <div id="marketCartonsChart"></div>
+            <div id="marketCartonsLegend" class="mt-2" style="padding-bottom:6px"></div>
           </div>
         </div>
       </div>

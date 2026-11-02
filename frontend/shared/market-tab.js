@@ -283,7 +283,7 @@ const LWMarketTab = (() => {
             });
           if (!weeks.size) return;
           series.push({
-            label: String(season), ...seasonStyle(season), emphasize: plotted.length > 1 && season === newest,
+            label: `${_pack}-${season}`, ...seasonStyle(season), emphasize: plotted.length > 1 && season === newest,
             points: [...weeks.entries()].sort((x, y) => x[0] - y[0]).map(([w, acc]) => {
               const from = anchorDay(season) + start + w * 7;
               const price = acc.gross / acc.cartons;

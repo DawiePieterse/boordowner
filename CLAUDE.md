@@ -87,6 +87,7 @@ There is no CI in this repo. Run the tests yourself before pushing.
 ## The farm PC
 
 - **Releases are signed tags; merging to `main` deploys nothing.** `update_owner_server.bat` picks the newest `v*` tag and verifies its signature against `data\release_key.fpr`.
+- **The updater starts itself again after its checkout** (`"%~f0" %* --checked-out`, the last line of that block): cmd reads a batch file off the disk as it runs, so a release that changed the updater left the old run carrying on at a stale byte of the new file (Boord Packhouse v0.66 ended "failed" that way, the code checked out but the server never restarted). The new run finds itself on the newest tag, skips the checkout and does the rest; `--checked-out` stops a second lap. Keep that line last in the block (the test checks it), and the lines just before it able to run outside the block.
 - **The updater's dependency check must name exactly `backend/requirements.txt`, by import name.** `tests/test_updater.py` holds the two lists together. Up to 1.9.0 it named two packages this app never installed, so every update stopped with a healthy server.
 - **`stop_server.ps1`, never a bare `schtasks /end`.**
   - Ending the task ends only the launcher. The uvicorn it started keeps port 8010, so the new release can't bind it and the old one keeps answering.

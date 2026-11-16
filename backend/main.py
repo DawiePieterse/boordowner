@@ -20,12 +20,22 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 import config
+import tunnel_gate
 import market_reference
 from db import boord_engine, init_owner_db
 from routers import (ai, analogs, analysis, boord_data, dashboard, estimate, historical,
                      historical_report, market, risk, version, weather)
 
 app = FastAPI(title="Boord Owner")
+
+# Who may reach this app through the Cloudflare Tunnel (tunnel_gate.py): the
+# paired-device roles it admits there. Tailscale is not asked anything.
+# The owner only. This is the owner's view - the season's money, the
+# estimate, the AI - and a device that signed in with the office's admin PIN
+# is not thereby the owner. An owner's pairing is made in Boord by another
+# owner, or from a device on Tailscale.
+TUNNEL_ROLES = ("owner",)
+tunnel_gate.install(app, TUNNEL_ROLES)
 
 app.add_middleware(
     CORSMiddleware,

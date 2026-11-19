@@ -54,7 +54,7 @@ This app is one of seven that run together on the farm PC (`bekfontein-server`),
 All backend commands run from `backend/`.
 
 ```sh
-python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+uv venv --python 3.12 --seed .venv && .venv/bin/python -m pip install -r requirements-dev.txt   # anthropic 1.x needs Python 3.10+
 .venv/bin/python -m pytest -q                                   # all tests, no network
 .venv/bin/python -m pytest tests/test_estimate.py -q            # one file
 BOORD_DB_PATH=../../Boord/data/boord.db .venv/bin/python run_preview.py   # dev server, http://localhost:8010/

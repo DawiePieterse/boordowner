@@ -26,6 +26,9 @@ const LWAnalysisTab = (() => {
     document.getElementById("yieldPerTreeMetric").addEventListener("change", () => {
       if (_data) renderYieldPerTreeHeatmap(_data);
     });
+    document.getElementById("yieldPerTreeVariety").addEventListener("change", () => {
+      if (_data) renderYieldPerTreeHeatmap(_data);
+    });
     document.getElementById("varietyFilter").addEventListener("change", () => {
       if (_data) renderVarietyYield(_data);
     });
@@ -225,8 +228,19 @@ const LWAnalysisTab = (() => {
     const metric = document.getElementById("yieldPerTreeMetric").value; // "kg_tree" | "kg_ha"
     const metricLabel = metric === "kg_ha" ? "Hectare" : "Tree";
     document.getElementById("yieldPerTreeTitle").textContent = `Yield per ${metricLabel} by Block and Season`;
-    const years = _blockYears(data);
-    const blocks = data.block_yield;
+    // Latest season first: the owner reads this season against the ones before it.
+    const years = _blockYears(data).slice().reverse();
+    const select = document.getElementById("yieldPerTreeVariety");
+    const names = [...new Set(data.block_yield.map((b) => b.variety).filter(Boolean))].sort();
+    const signature = names.join("|");
+    if (select.dataset.varieties !== signature) {   // same rebuild rule as #varietyFilter
+      const previous = select.value;
+      select.innerHTML = `<option value="">All Varieties</option>` +
+        names.map((n) => `<option value="${Boord.escapeHtml(n)}">${Boord.escapeHtml(n)}</option>`).join("");
+      select.dataset.varieties = signature;
+      select.value = names.includes(previous) ? previous : "";
+    }
+    const blocks = select.value ? data.block_yield.filter((b) => b.variety === select.value) : data.block_yield;
     LWCharts.heatmap(document.getElementById("yieldPerTreeHeatmap"), {
       rowLabels: blocks.map((b) => b.name || b.block_id),
       colLabels: years.map(String),

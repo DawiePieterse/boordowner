@@ -136,8 +136,15 @@ def _live_sales(boord: Session) -> list:
     its part-payments added up), else the office's typed statement. A note
     with neither is not sold yet and adds nothing. Juice notes (bins, not
     pallets) are not a pack type and are left out."""
-    notes = _packhouse_rows("SELECT uuid, note_no, loaded_on, receiver, bins FROM deliverynote "
-                            "WHERE removed = 0 AND loaded_on != ''")
+    notes = _packhouse_rows("SELECT * FROM deliverynote WHERE removed = 0 AND loaded_on != ''")
+    # Only the farm's own notes. Packhouse keeps a series of note numbers per
+    # supplier (its 0.73), and a market invoice is matched by the bare number:
+    # another supplier's note 1352 must not pick up the farm's invoice for
+    # B-1352. supplier_id is absent before that release and empty on a note
+    # older than it, and those are all the farm's own.
+    own = {r["id"] for r in _boord_rows(boord, "SELECT id FROM supplier WHERE is_own_farm = 1")}
+    if own:
+        notes = [n for n in notes if n.get("supplier_id") is None or n["supplier_id"] in own]
     if not notes:
         return []
     statements = {r["note_uuid"]: json.loads(r["lines"] or "[]")

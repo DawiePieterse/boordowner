@@ -267,6 +267,24 @@ def test_live_season_comes_from_delivery_notes_and_market_records(client):
     assert daily["seasons"] == [2026] and daily["workbook_seasons"] == []
 
 
+def test_another_suppliers_note_never_takes_the_farms_invoice(client):
+    """Packhouse 0.73 keeps a series of note numbers per supplier, and an
+    invoice is matched by the bare number: the neighbour's note 1302 must not
+    be sold a second time on the farm's invoice for B-1302. A note with no
+    supplier (older than that release) is the farm's own."""
+    _write_live_season(_LIVE_NOTES, invoices=[("1302", json.dumps([{"product": "LICH", "sold": 20, "income": 5000}]))])
+    conn = sqlite3.connect(config.PACKHOUSE_DB_PATH)
+    conn.execute("ALTER TABLE deliverynote ADD COLUMN supplier_id INTEGER")
+    conn.execute("INSERT INTO deliverynote VALUES ('x1', 1302, '2026-11-05', 'Dapper', '[]', 0, 2)")
+    conn.commit()
+    conn.close()
+    try:
+        points = _market(client)["daily"]["points"]
+    finally:
+        _drop_live_season()
+    assert [(pt["date"], pt["cartons"]) for pt in points] == [("2026-11-03", 20.0)]
+
+
 def test_joburg_days_ride_with_the_daily_points_and_open_their_own_season(client):
     """Price is per unit sold (value over units), filed under its season by
     Boord's anchor (1 August in the fixture) - and a season with only Joburg
